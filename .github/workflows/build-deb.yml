@@ -1,0 +1,136 @@
+name: Build wxkeyboard (rootless)
+
+on:
+  push:
+    branches:
+      - main
+      - feature/**
+    tags:
+      - v*
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build .deb
+    runs-on: macos-14
+    env:
+      THEOS: /Users/runner/theos
+      THEOS_PACKAGE_SCHEME: rootless
+      FINALPACKAGE: "1"
+      CCACHE_DIR: /Users/runner/.ccache
+    outputs:
+      artifact-name: ${{ steps.build-meta.outputs.artifact_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Theos refs
+        id: theos-refs
+        run: |
+          set -euo pipefail
+          THEOS_SHA="$(git ls-remote https://github.com/theos/theos HEAD | cut -f1)"
+          SDKS_SHA="$(git ls-remote https://github.com/theos/sdks HEAD | cut -f1)"
+          if [ -z "$THEOS_SHA" ] || [ -z "$SDKS_SHA" ]; then
+            echo "Unable to determine Theos or SDKs commits" >&2
+            exit 1
+          fi
+          echo "theos=$THEOS_SHA" >> "$GITHUB_OUTPUT"
+          echo "sdks=$SDKS_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Theos cache
+        id: cache-theos
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.THEOS }}
+          key: theos-${{ runner.os }}-${{ runner.arch }}-${{ steps.theos-refs.outputs.theos }}-${{ steps.theos-refs.outputs.sdks }}-${{ hashFiles('.github/workflows/build-deb.yml') }}
+          restore-keys: |
+            theos-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install Homebrew tools
+        run: |
+          set -euo pipefail
+          brew update
+          brew install make dpkg ldid ccache gnu-sed coreutils fakeroot
+
+      - name: Setup Theos (if needed)
+        if: steps.cache-theos.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          rm -rf "$THEOS"
+          git clone --depth=1 https://github.com/theos/theos.git "$THEOS"
+          git clone --depth=1 https://github.com/theos/sdks.git "$THEOS/sdks"
+
+      - name: Prepare build env
+        run: |
+          set -euo pipefail
+          echo "Using THEOS at: $THEOS"
+          mkdir -p "$CCACHE_DIR"
+          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
+          echo "THEOS_PACKAGE_SCHEME=$THEOS_PACKAGE_SCHEME" >> "$GITHUB_ENV"
+          echo "FINALPACKAGE=$FINALPACKAGE" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=$CCACHE_DIR" >> "$GITHUB_ENV"
+          echo "PATH=/opt/homebrew/opt/ccache/libexec:$PATH" >> "$GITHUB_ENV"
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ steps.theos-refs.outputs.theos }}-${{ github.ref_type }}-${{ github.ref_name }}-${{ hashFiles('Makefile', '**/Makefile', '**/*.xm', '**/*.x', '**/*.mm', '**/*.m', '**/*.h') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build package
+        run: |
+          set -euo pipefail
+          make clean || true
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless -j"$(sysctl -n hw.ncpu)"
+
+      - name: Collect artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cp -v packages/*.deb artifacts/ || { echo "No .deb produced"; ls -R; exit 1; }
+
+      - name: Determine artifact metadata
+        id: build-meta
+        run: |
+          set -euo pipefail
+          REF_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-unknown}}"
+          REF_SAFE="$(printf '%s' "$REF_NAME" | sed 's#[^A-Za-z0-9._-]#-#g')"
+          SHORT_SHA="$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
+          ARTIFACT_NAME="wxkeyboard_${REF_SAFE}_${SHORT_SHA}"
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build-meta.outputs.artifact_name }}
+          path: artifacts/*.deb
+          if-no-files-found: error
+
+  release:
+    name: Release on tag
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-14
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.deb
+          name: wxkeyboard ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
