@@ -1,7 +1,7 @@
 TARGET := iphone:clang:latest:16.5
 ARCHS := arm64 arm64e
 THEOS_PACKAGE_SCHEME := rootless
-INSTALL_TARGET_PROCESSES := com.tencent.wetype
+INSTALL_TARGET_PROCESSES := com.tencent.wetype.keyboard
 PACKAGE_VERSION := 1.0.0
 
 include $(THEOS)/makefiles/common.mk

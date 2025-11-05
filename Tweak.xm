@@ -95,6 +95,27 @@ static void WTSUpdateLanguageStateWithMode(id mode) {
     }
 }
 
+static BOOL WTSProcessIsWeTypeKeyboard(void) {
+    static dispatch_once_t onceToken;
+    static BOOL result = NO;
+    dispatch_once(&onceToken, ^{
+        NSString *bundleIdentifier = [NSBundle mainBundle].bundleIdentifier ?: @"";
+        if ([bundleIdentifier isEqualToString:@"com.tencent.wetype.keyboard"]) {
+            result = YES;
+        } else if (bundleIdentifier.length > 0) {
+            if ([bundleIdentifier hasPrefix:@"com.tencent.wetype"] && [bundleIdentifier hasSuffix:@".keyboard"]) {
+                result = YES;
+            }
+        }
+        if (result) {
+            WTSLog(@"Activating for bundle %@", bundleIdentifier);
+        } else {
+            WTSLog(@"Skipping bundle %@", bundleIdentifier);
+        }
+    });
+    return result;
+}
+
 static BOOL WTSIsApproxVertical(CGPoint translation) {
     CGFloat dy = fabs(translation.y);
     CGFloat dx = fabs(translation.x);
@@ -566,6 +587,8 @@ static void WTSInstallSwipeIfNeeded(UIView *view) {
 @interface WBKeyboardView : UIView @end
 @interface WBInputViewController : UIInputViewController @end
 
+%group WTSWeTypeHooks
+
 %hook WBMainInputView
 - (void)didMoveToWindow {
     %orig;
@@ -601,3 +624,13 @@ static void WTSInstallSwipeIfNeeded(UIView *view) {
     WTSInstallSwipeIfNeeded(self.view);
 }
 %end
+
+%end
+
+%ctor {
+    @autoreleasepool {
+        if (WTSProcessIsWeTypeKeyboard()) {
+            %init(WTSWeTypeHooks);
+        }
+    }
+}
