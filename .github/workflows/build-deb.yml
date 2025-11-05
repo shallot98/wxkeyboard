@@ -67,7 +67,14 @@ jobs:
             rm -rf "$THEOS/sdks"
             git clone --depth=1 https://github.com/theos/sdks.git "$THEOS/sdks"
           fi
+          # Ensure dm.pl is executable
+          chmod +x "$THEOS/bin/dm.pl" || true
           ls -l "$THEOS/bin/dm.pl"
+          # Verify dm.pl exists and is executable
+          if [ ! -x "$THEOS/bin/dm.pl" ]; then
+            echo "ERROR: dm.pl is not executable after setup!"
+            exit 1
+          fi
 
       - name: Prepare build env
         run: |
@@ -87,6 +94,21 @@ jobs:
           key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ github.ref_type }}-${{ github.ref_name }}-${{ hashFiles('Makefile', '**/Makefile', '**/*.xm', '**/*.x', '**/*.mm', '**/*.m', '**/*.h') }}
           restore-keys: |
             ccache-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Verify build requirements
+        run: |
+          set -euo pipefail
+          echo "Verifying THEOS setup..."
+          echo "THEOS=$THEOS"
+          echo "PATH=$PATH"
+          echo "Checking for dm.pl..."
+          if [ ! -x "$THEOS/bin/dm.pl" ]; then
+            echo "ERROR: dm.pl not found or not executable!"
+            ls -la "$THEOS/bin/" || echo "THEOS bin directory not found"
+            exit 1
+          fi
+          which dm.pl || echo "dm.pl not in PATH (this is OK if THEOS/bin/dm.pl exists)"
+          echo "dm.pl found and is executable at: $THEOS/bin/dm.pl"
 
       - name: Build package
         run: |
