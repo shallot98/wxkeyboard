@@ -53,7 +53,7 @@ jobs:
         if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          git clone --depth=1 https://github.com/theos/theos.git "$THEOS"
+          git clone --depth=1 --recursive https://github.com/theos/theos.git "$THEOS"
           rm -rf "$THEOS/sdks"
           git clone --depth=1 https://github.com/theos/sdks.git "$THEOS/sdks"
 
@@ -63,7 +63,7 @@ jobs:
           if [ ! -x "$THEOS/bin/dm.pl" ]; then
             echo "Installing Theos because dm.pl is missing..."
             rm -rf "$THEOS"
-            git clone --depth=1 https://github.com/theos/theos.git "$THEOS"
+            git clone --depth=1 --recursive https://github.com/theos/theos.git "$THEOS"
             rm -rf "$THEOS/sdks"
             git clone --depth=1 https://github.com/theos/sdks.git "$THEOS/sdks"
           fi
