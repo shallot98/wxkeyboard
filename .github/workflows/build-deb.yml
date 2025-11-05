@@ -1,12 +1,7 @@
-name: Build wxkeyboard (rootless)
+name: CI
 
 on:
   push:
-    branches:
-      - main
-      - feature/**
-    tags:
-      - v*
   pull_request:
   workflow_dispatch:
 
@@ -15,113 +10,23 @@ permissions:
 
 jobs:
   build:
-    name: Build .deb
+    name: Build Tweak
     runs-on: macos-14
-    env:
-      THEOS_PACKAGE_SCHEME: rootless
-      FINALPACKAGE: "1"
-      CCACHE_DIR: /Users/runner/.ccache
-    outputs:
-      artifact-name: ${{ steps.build-meta.outputs.artifact_name }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          submodules: recursive
 
-      - name: Prepare env (THEOS + PATH)
-        run: |
-          echo "THEOS=${{ github.workspace }}/theos" >> "$GITHUB_ENV"
-          echo "PATH=${{ github.workspace }}/theos/bin:$PATH" >> "$GITHUB_ENV"
+      - name: Setup Theos
+        uses: theos/theos-action@v1
 
-      - name: Restore Theos cache
-        id: cache-theos
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/theos
-          key: theos-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/workflows/build-deb.yml') }}
-          restore-keys: |
-            theos-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Install Homebrew tools
+      - name: Build Package
         run: |
           set -euo pipefail
-          brew update
-          brew install make dpkg ldid ccache gnu-sed coreutils fakeroot
-
-      - name: Setup Theos (if needed)
-        if: steps.cache-theos.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          git clone --depth=1 --recursive https://github.com/theos/theos.git "$THEOS"
-          rm -rf "$THEOS/sdks"
-          git clone --depth=1 https://github.com/theos/sdks.git "$THEOS/sdks"
-
-      - name: Setup/Reinstall Theos if needed
-        run: |
-          set -euo pipefail
-          if [ ! -x "$THEOS/bin/dm.pl" ]; then
-            echo "Installing Theos because dm.pl is missing..."
-            rm -rf "$THEOS"
-            git clone --depth=1 --recursive https://github.com/theos/theos.git "$THEOS"
-            rm -rf "$THEOS/sdks"
-            git clone --depth=1 https://github.com/theos/sdks.git "$THEOS/sdks"
-          fi
-          # Ensure dm.pl is executable
-          chmod +x "$THEOS/bin/dm.pl" || true
-          ls -l "$THEOS/bin/dm.pl"
-          # Verify dm.pl exists and is executable
-          if [ ! -x "$THEOS/bin/dm.pl" ]; then
-            echo "ERROR: dm.pl is not executable after setup!"
-            exit 1
-          fi
-
-      - name: Prepare build env
-        run: |
-          set -euo pipefail
-          echo "Using THEOS at: $THEOS"
-          mkdir -p "$CCACHE_DIR"
-          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
-          echo "THEOS_PACKAGE_SCHEME=$THEOS_PACKAGE_SCHEME" >> "$GITHUB_ENV"
-          echo "FINALPACKAGE=$FINALPACKAGE" >> "$GITHUB_ENV"
-          echo "CCACHE_DIR=$CCACHE_DIR" >> "$GITHUB_ENV"
-          echo "PATH=/opt/homebrew/opt/ccache/libexec:$THEOS/bin:$PATH" >> "$GITHUB_ENV"
-
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ github.ref_type }}-${{ github.ref_name }}-${{ hashFiles('Makefile', '**/Makefile', '**/*.xm', '**/*.x', '**/*.mm', '**/*.m', '**/*.h') }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Verify build requirements
-        run: |
-          set -euo pipefail
-          echo "Verifying THEOS setup..."
-          echo "THEOS=$THEOS"
-          echo "PATH=$PATH"
-          echo "Checking for dm.pl..."
-          if [ ! -x "$THEOS/bin/dm.pl" ]; then
-            echo "ERROR: dm.pl not found or not executable!"
-            ls -la "$THEOS/bin/" || echo "THEOS bin directory not found"
-            exit 1
-          fi
-          which dm.pl || echo "dm.pl not in PATH (this is OK if THEOS/bin/dm.pl exists)"
-          echo "dm.pl found and is executable at: $THEOS/bin/dm.pl"
-
-      - name: Build package
-        run: |
-          set -euo pipefail
-          make clean || true
-          export THEOS_HOST_ARCH=arm64
+          make clean
           make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless -j"$(sysctl -n hw.ncpu)"
-
-      - name: Collect artifacts
-        run: |
-          set -euo pipefail
-          mkdir -p artifacts
-          cp -v packages/*.deb artifacts/ || { echo "No .deb produced"; ls -R; exit 1; }
 
       - name: Determine artifact metadata
         id: build-meta
@@ -133,11 +38,11 @@ jobs:
           ARTIFACT_NAME="wxkeyboard_${REF_SAFE}_${SHORT_SHA}"
           echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Upload artifact
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.build-meta.outputs.artifact_name }}
-          path: artifacts/*.deb
+          path: packages/*.deb
           if-no-files-found: error
 
   release:
