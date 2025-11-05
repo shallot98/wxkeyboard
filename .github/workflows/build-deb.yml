@@ -1,0 +1,79 @@
+name: Build rootless .deb
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      THEOS_PACKAGE_SCHEME: rootless
+      TARGET: iphone:clang:16.5:latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git \
+            make \
+            perl \
+            python3 \
+            unzip \
+            zip \
+            fakeroot \
+            dpkg-dev \
+            ldid \
+            ca-certificates
+
+      - name: Setup Theos
+        uses: Randomblock1/setup-theos@v1
+
+      - name: Build package (rootless)
+        run: |
+          make clean package
+
+      - name: Verify build artifacts
+        run: |
+          ls -al packages
+          test -n "$(ls packages/*.deb 2>/dev/null)"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wetype-rootless-build
+          path: |
+            packages/*.deb
+            packages/*.dSYM
+          if-no-files-found: warn
+
+  release:
+    name: Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wetype-rootless-build
+          path: dist
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.deb
+            dist/*.dSYM
+          generate_release_notes: true
+          fail_on_unmatched_files: false
