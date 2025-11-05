@@ -1,0 +1,72 @@
+name: Build rootless .deb
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-13
+    env:
+      THEOS: ${{ github.workspace }}/.theos
+      THEOS_DEVICE_IP: 127.0.0.1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          brew update
+          brew install make dpkg ldid fakeroot git
+
+      - name: Cache Theos
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.THEOS }}
+          key: theos-${{ runner.os }}-v1
+
+      - name: Setup Theos
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$THEOS"
+          git clone --depth=1 https://github.com/theos/theos "$THEOS"
+          mkdir -p "$THEOS/sdks"
+          git clone --depth=1 https://github.com/theos/sdks "$THEOS/sdks"
+
+      - name: Show SDKs
+        run: ls -1 "$THEOS/sdks"
+
+      - name: Build package (rootless)
+        run: |
+          make clean
+          make package FINALPACKAGE=1
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wxkeyboard-rootless-deb
+          path: packages/*.deb
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: macos-13
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wxkeyboard-rootless-deb
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
