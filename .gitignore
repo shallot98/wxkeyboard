@@ -1,0 +1,5 @@
+# Theos build artifacts
+.theos/
+packages/
+obj/
+.DS_Store

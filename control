@@ -1,0 +1,10 @@
+Package: com.ctonew.wetypeswipe
+Name: WeType Vertical Swipe Toggle
+Architecture: iphoneos-arm
+Version: 1.0.0
+Priority: optional
+Section: Tweaks
+Maintainer: cto.new <dev@cto.new>
+Author: cto.new <dev@cto.new>
+Depends: mobilesubstrate (>= 0.9.5000)
+Description: Adds vertical swipe gesture in WeType to switch between Chinese and English without using the candidate bar.
