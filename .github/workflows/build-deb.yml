@@ -29,21 +29,27 @@ jobs:
           git clone --depth=1 https://github.com/theos/theos.git "$THEOS"
           echo "THEOS=$THEOS" >> "$GITHUB_ENV"
 
-      - name: Install iOS SDK (prefer 16.5, fall back to 16.4 -> 16.1)
+      - name: Install iOS SDK (prefer 16.5, fallback 16.4 → 16.1)
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$THEOS/sdks"
           cd "$THEOS/sdks"
-          try_fetch() { curl -L --fail -o iPhoneOS$1.sdk.tar.xz "https://github.com/theos/sdks/releases/download/$2/iPhoneOS$1.sdk.tar.xz" && tar -xf iPhoneOS$1.sdk.tar.xz && rm -f iPhoneOS$1.sdk.tar.xz; }
-          # Primary: 16.5 (latest tag alias)
           if curl -L --fail -o iPhoneOS16.5.sdk.tar.xz "https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz"; then
             tar -xf iPhoneOS16.5.sdk.tar.xz && rm -f iPhoneOS16.5.sdk.tar.xz
           else
             echo "16.5 latest not found, trying known tags..."
-            try_fetch 16.5 20240708 || try_fetch 16.4 20240708 || try_fetch 16.1 20230603
+            fetch() { curl -L --fail -o "iPhoneOS$1.sdk.tar.xz" "https://github.com/theos/sdks/releases/download/$2/iPhoneOS$1.sdk.tar.xz" && tar -xf "iPhoneOS$1.sdk.tar.xz" && rm -f "iPhoneOS$1.sdk.tar.xz"; }
+            fetch 16.5 20240708 || fetch 16.4 20240708 || fetch 16.1 20230603
           fi
           ls -la
+
+      - name: Check clang and SDK
+        run: |
+          xcode-select -p
+          clang --version
+          xcrun --sdk iphoneos --show-sdk-path || true
+          ls "$THEOS/sdks"
 
       - name: Build (rootless)
         run: |
