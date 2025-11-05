@@ -29,9 +29,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Prepare env (THEOS)
+      - name: Prepare env (THEOS + PATH)
         run: |
           echo "THEOS=${{ github.workspace }}/theos" >> "$GITHUB_ENV"
+          echo "PATH=${{ github.workspace }}/theos/bin:$PATH" >> "$GITHUB_ENV"
 
       - name: Restore Theos cache
         id: cache-theos
@@ -56,17 +57,17 @@ jobs:
           rm -rf "$THEOS/sdks"
           git clone --depth=1 https://github.com/theos/sdks.git "$THEOS/sdks"
 
-      - name: Sanity check Theos
+      - name: Setup/Reinstall Theos if needed
         run: |
           set -euo pipefail
-          if [ ! -f "$THEOS/bin/dm.pl" ]; then
-            echo "dm.pl missing, reinstalling Theos..."
+          if [ ! -x "$THEOS/bin/dm.pl" ]; then
+            echo "Installing Theos because dm.pl is missing..."
             rm -rf "$THEOS"
             git clone --depth=1 https://github.com/theos/theos.git "$THEOS"
             rm -rf "$THEOS/sdks"
             git clone --depth=1 https://github.com/theos/sdks.git "$THEOS/sdks"
           fi
-          ls -la "$THEOS/bin"
+          ls -l "$THEOS/bin/dm.pl"
 
       - name: Prepare build env
         run: |
@@ -77,7 +78,7 @@ jobs:
           echo "THEOS_PACKAGE_SCHEME=$THEOS_PACKAGE_SCHEME" >> "$GITHUB_ENV"
           echo "FINALPACKAGE=$FINALPACKAGE" >> "$GITHUB_ENV"
           echo "CCACHE_DIR=$CCACHE_DIR" >> "$GITHUB_ENV"
-          echo "PATH=/opt/homebrew/opt/ccache/libexec:$PATH" >> "$GITHUB_ENV"
+          echo "PATH=/opt/homebrew/opt/ccache/libexec:$THEOS/bin:$PATH" >> "$GITHUB_ENV"
 
       - name: Restore ccache
         uses: actions/cache@v4
