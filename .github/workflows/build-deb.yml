@@ -1,0 +1,50 @@
+name: Build .deb Package
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Cache Theos
+      id: cache-theos
+      uses: actions/cache@v3
+      with:
+        path: ~/theos
+        key: ${{ runner.os }}-theos-${{ hashFiles('**/Makefile') }}
+        restore-keys: |
+          ${{ runner.os }}-theos-
+          
+    - name: Setup Theos (if needed)
+      if: steps.cache-theos.outputs.cache-hit != 'true'
+      run: |
+        set -euo pipefail
+        git clone --depth=1 https://github.com/theos/theos.git "$THEOS"
+        # theos repository ships a placeholder sdks directory; remove it before cloning the real SDKs repo
+        rm -rf "$THEOS/sdks"
+        git clone --depth=1 https://github.com/theos/sdks.git "$THEOS/sdks"
+      env:
+        THEOS: ~/theos
+        
+    - name: Build package
+      run: |
+        export THEOS=~/theos
+        make package
+      env:
+        THEOS_PACKAGE_SCHEME: rootless
+        
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: deb-package
+        path: "*.deb"
+        retention-days: 30
