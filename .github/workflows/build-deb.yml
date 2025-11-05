@@ -114,7 +114,8 @@ jobs:
         run: |
           set -euo pipefail
           make clean || true
-          arch -arm64 make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless -j"$(sysctl -n hw.ncpu)"
+          export THEOS_HOST_ARCH=arm64
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless -j"$(sysctl -n hw.ncpu)"
 
       - name: Collect artifacts
         run: |
