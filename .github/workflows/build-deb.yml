@@ -1,79 +1,57 @@
-name: Build rootless .deb
+name: Build Tweak
 
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*' ]
   pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     env:
+      THEOS: ${{ env.HOME }}/theos
       THEOS_PACKAGE_SCHEME: rootless
-      TARGET: iphone:clang:16.5:latest
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install build dependencies
+      - name: Install build dependencies (brew)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git \
-            make \
-            perl \
-            python3 \
-            unzip \
-            zip \
-            fakeroot \
-            dpkg-dev \
-            ldid \
-            ca-certificates
+          brew update
+          brew install ldid dpkg fakeroot gnu-sed wget xz unzip coreutils findutils
 
       - name: Setup Theos
-        uses: Randomblock1/setup-theos@v1
+        run: |
+          git clone --depth=1 https://github.com/theos/theos.git "$THEOS"
+          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
 
-      - name: Build package (rootless)
+      - name: Install iOS SDK (prefer 16.5, fall back to 16.4 -> 16.1)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$THEOS/sdks"
+          cd "$THEOS/sdks"
+          try_fetch() { curl -L --fail -o iPhoneOS$1.sdk.tar.xz "https://github.com/theos/sdks/releases/download/$2/iPhoneOS$1.sdk.tar.xz" && tar -xf iPhoneOS$1.sdk.tar.xz && rm -f iPhoneOS$1.sdk.tar.xz; }
+          # Primary: 16.5 (latest tag alias)
+          if curl -L --fail -o iPhoneOS16.5.sdk.tar.xz "https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz"; then
+            tar -xf iPhoneOS16.5.sdk.tar.xz && rm -f iPhoneOS16.5.sdk.tar.xz
+          else
+            echo "16.5 latest not found, trying known tags..."
+            try_fetch 16.5 20240708 || try_fetch 16.4 20240708 || try_fetch 16.1 20230603
+          fi
+          ls -la
+
+      - name: Build (rootless)
         run: |
           make clean package
 
-      - name: Verify build artifacts
-        run: |
-          ls -al packages
-          test -n "$(ls packages/*.deb 2>/dev/null)"
-
-      - name: Upload artifacts
+      - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wetype-rootless-build
-          path: |
-            packages/*.deb
-            packages/*.dSYM
-          if-no-files-found: warn
-
-  release:
-    name: Release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: wetype-rootless-build
-          path: dist
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/*.deb
-            dist/*.dSYM
-          generate_release_notes: true
-          fail_on_unmatched_files: false
+          name: deb-package
+          path: packages/*.deb
+          if-no-files-found: error
