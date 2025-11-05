@@ -18,7 +18,6 @@ jobs:
     name: Build .deb
     runs-on: macos-14
     env:
-      THEOS: /Users/runner/theos
       THEOS_PACKAGE_SCHEME: rootless
       FINALPACKAGE: "1"
       CCACHE_DIR: /Users/runner/.ccache
@@ -30,25 +29,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Determine Theos refs
-        id: theos-refs
+      - name: Prepare env (THEOS)
         run: |
-          set -euo pipefail
-          THEOS_SHA="$(git ls-remote https://github.com/theos/theos HEAD | cut -f1)"
-          SDKS_SHA="$(git ls-remote https://github.com/theos/sdks HEAD | cut -f1)"
-          if [ -z "$THEOS_SHA" ] || [ -z "$SDKS_SHA" ]; then
-            echo "Unable to determine Theos or SDKs commits" >&2
-            exit 1
-          fi
-          echo "theos=$THEOS_SHA" >> "$GITHUB_OUTPUT"
-          echo "sdks=$SDKS_SHA" >> "$GITHUB_OUTPUT"
+          echo "THEOS=${{ github.workspace }}/theos" >> "$GITHUB_ENV"
 
       - name: Restore Theos cache
         id: cache-theos
         uses: actions/cache@v4
         with:
-          path: ${{ env.THEOS }}
-          key: theos-${{ runner.os }}-${{ runner.arch }}-${{ steps.theos-refs.outputs.theos }}-${{ steps.theos-refs.outputs.sdks }}-${{ hashFiles('.github/workflows/build-deb.yml') }}
+          path: ${{ github.workspace }}/theos
+          key: theos-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/workflows/build-deb.yml') }}
           restore-keys: |
             theos-${{ runner.os }}-${{ runner.arch }}-
 
@@ -62,10 +52,21 @@ jobs:
         if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          rm -rf "$THEOS"
           git clone --depth=1 https://github.com/theos/theos.git "$THEOS"
           rm -rf "$THEOS/sdks"
           git clone --depth=1 https://github.com/theos/sdks.git "$THEOS/sdks"
+
+      - name: Sanity check Theos
+        run: |
+          set -euo pipefail
+          if [ ! -f "$THEOS/bin/dm.pl" ]; then
+            echo "dm.pl missing, reinstalling Theos..."
+            rm -rf "$THEOS"
+            git clone --depth=1 https://github.com/theos/theos.git "$THEOS"
+            rm -rf "$THEOS/sdks"
+            git clone --depth=1 https://github.com/theos/sdks.git "$THEOS/sdks"
+          fi
+          ls -la "$THEOS/bin"
 
       - name: Prepare build env
         run: |
@@ -82,7 +83,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ steps.theos-refs.outputs.theos }}-${{ github.ref_type }}-${{ github.ref_name }}-${{ hashFiles('Makefile', '**/Makefile', '**/*.xm', '**/*.x', '**/*.mm', '**/*.m', '**/*.h') }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ github.ref_type }}-${{ github.ref_name }}-${{ hashFiles('Makefile', '**/Makefile', '**/*.xm', '**/*.x', '**/*.mm', '**/*.m', '**/*.h') }}
           restore-keys: |
             ccache-${{ runner.os }}-${{ runner.arch }}-
 
