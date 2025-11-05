@@ -1,79 +1,53 @@
-name: Build rootless .deb
+name: Build Tweak
 
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*' ]
   pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    env:
-      THEOS_PACKAGE_SCHEME: rootless
-      TARGET: iphone:clang:16.5:latest
+    runs-on: macos-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      - name: Install build dependencies
+      - name: Install build dependencies (brew)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git \
-            make \
-            perl \
-            python3 \
-            unzip \
-            zip \
-            fakeroot \
-            dpkg-dev \
-            ldid \
-            ca-certificates
+          brew update
+          brew install ldid dpkg fakeroot gnu-sed wget xz unzip
 
-      - name: Setup Theos
-        uses: Randomblock1/setup-theos@v1
-
-      - name: Build package (rootless)
+      - name: Install Theos
         run: |
-          make clean package
+          export THEOS="$HOME/theos"
+          git clone --depth=1 https://github.com/theos/theos.git "$THEOS"
+          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
 
-      - name: Verify build artifacts
+      - name: Install iOS 16.1 SDK
+        shell: bash
         run: |
-          ls -al packages
-          test -n "$(ls packages/*.deb 2>/dev/null)"
+          mkdir -p "$THEOS/sdks"
+          set -e
+          URL_PRIMARY="https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.1.sdk.tar.xz"
+          URL_FALLBACK="https://github.com/theos/sdks/releases/download/20230603/iPhoneOS16.1.sdk.tar.xz"
+          TMPFILE="$THEOS/sdks/iPhoneOS16.1.sdk.tar.xz"
+          if ! curl -L --fail -o "$TMPFILE" "$URL_PRIMARY"; then
+            echo "Primary SDK URL failed, trying fallback..."
+            curl -L --fail -o "$TMPFILE" "$URL_FALLBACK"
+          fi
+          tar -xf "$TMPFILE" -C "$THEOS/sdks"
+          rm -f "$TMPFILE"
+          ls -la "$THEOS/sdks"
 
-      - name: Upload artifacts
+      - name: Build (rootless)
+        run: |
+          make clean package THEOS_PACKAGE_SCHEME=rootless
+
+      - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wetype-rootless-build
-          path: |
-            packages/*.deb
-            packages/*.dSYM
-          if-no-files-found: warn
-
-  release:
-    name: Release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: wetype-rootless-build
-          path: dist
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/*.deb
-            dist/*.dSYM
-          generate_release_notes: true
-          fail_on_unmatched_files: false
+          name: deb-package
+          path: packages/*.deb
+          if-no-files-found: error
