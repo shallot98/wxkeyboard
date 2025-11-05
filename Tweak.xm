@@ -6,6 +6,10 @@
 #include <stdlib.h>
 #include <strings.h>
 
+@interface UIInputViewController (Private)
+- (NSArray *)inputModes;
+@end
+
 static const CGFloat kWTVerticalTranslationThreshold = 22.0;
 static const CGFloat kWTHorizontalTranslationTolerance = 12.0;
 static const CGFloat kWTMaximumAngleDegrees = 20.0;
