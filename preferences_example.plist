@@ -7,23 +7,5 @@
     
     <key>DebugLog</key>
     <true/>
-    
-    <!-- Region-specific swipe feature -->
-    <key>RegionSwipe</key>
-    <true/>
-    
-    <!-- Minimum vertical distance for swipe detection (points) -->
-    <key>SwipeThreshold</key>
-    <real>25.0</real>
-    
-    <!-- Enable/disable specific regions -->
-    <key>NineKeyEnabled</key>
-    <true/>
-    
-    <key>NumberKeyEnabled</key>
-    <true/>
-    
-    <key>SpacebarEnabled</key>
-    <true/>
 </dict>
 </plist>

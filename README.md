@@ -1,14 +1,15 @@
-# WeType Vertical Swipe with Region-Specific Mapping
+# WeType Vertical Swipe Mode Switching
 
-This tweak implements region-specific vertical swipe actions for the WeType keyboard, allowing users to trigger different actions based on where they swipe on the keyboard.
+This tweak implements full-keyboard vertical swipe gestures for the WeType keyboard, allowing users to cycle through input modes by swiping up or down anywhere on the keyboard.
 
 ## Features
 
-### Region-Specific Actions
+### Full-Keyboard Vertical Swipe
 
-1. **Middle 9-key area**: Swipe up/down toggles between Chinese and English input modes
-2. **Bottom "switch to numbers" key**: Swipe up/down switches to the numeric keyboard
-3. **Spacebar**: Swipe up/down switches to the symbol keyboard
+1. **Swipe up anywhere**: Switch to previous input mode
+2. **Swipe down anywhere**: Switch to next input mode
+3. **WeType-specific integration**: Uses WeType's internal mode manager for proper mode ordering
+4. **Circular navigation**: Wraps around from first to last mode and vice versa
 
 ### Configuration
 
@@ -16,11 +17,6 @@ The tweak supports the following preferences (stored in `com.yourcompany.wxkeybo
 
 - `Enabled` (bool): Master toggle for the entire tweak (default: true)
 - `DebugLog` (bool): Enable debug logging (default: true)
-- `RegionSwipe` (bool): Enable region-specific swipe feature (default: true)
-- `SwipeThreshold` (float): Minimum vertical distance for swipe detection in points (default: 25.0)
-- `NineKeyEnabled` (bool): Enable swipe in the 9-key area (default: true)
-- `NumberKeyEnabled` (bool): Enable swipe on the number switch key (default: true)
-- `SpacebarEnabled` (bool): Enable swipe on the spacebar (default: true)
 
 ### Example Preferences
 
@@ -30,25 +26,26 @@ See `preferences_example.plist` for a complete example configuration.
 
 ### Gesture Recognition
 
-- Uses a single `UIPanGestureRecognizer` attached to the top-level keyboard container view
-- Configurable threshold for vertical movement detection
-- Coexists with taps and long-press gestures
-- Debounced to trigger at most once per gesture
+- Uses two `UISwipeGestureRecognizer` instances (up and down) attached to the top-level keyboard container view
+- `cancelsTouchesInView = NO` to minimize interference with key taps
+- Restricts to vertical direction only to avoid conflicts with horizontal gestures
+- One trigger per swipe gesture
 
-### Region Detection
+### WeType Integration
 
-The region detection uses a multi-layered approach:
+The implementation uses WeType-specific APIs for mode management:
 
-1. **Accessibility Properties**: Checks `accessibilityLabel` and `accessibilityIdentifier`
-2. **Class Name Analysis**: Matches view class names against known patterns
-3. **Geometric Heuristics**: Uses keyboard layout proportions as fallback
+1. **Mode Discovery**: Attempts to access WeType's `inputModeManager` for ordered mode list
+2. **Fallback Methods**: Uses multiple selector names to find current and available modes
+3. **Proper Switching**: Uses WeType's internal mode setting methods when available
+4. **Standard Fallback**: Falls back to iOS standard `inputModes` if WeType APIs fail
 
 ### Safety Features
 
 - Only activates when WeType keyboard is active and visible
-- Excludes emoji/clipboard/toolbar panels from triggering
-- Preserves existing long-press functionality
-- Comprehensive error handling and fallbacks
+- Ignores touches on system UI elements like panels and toolbars
+- Prevents duplicate gesture recognizer installation
+- Comprehensive error handling and logging
 
 ## Installation
 
@@ -74,29 +71,35 @@ Enable `DebugLog` to view detailed logs in `/var/mobile/Library/Preferences/wxke
 ## Troubleshooting
 
 ### Swipe not working
-- Check that `Enabled` and `RegionSwipe` are both true
-- Verify the specific region is enabled (e.g., `SpacebarEnabled`)
-- Increase `SwipeThreshold` if gestures are too sensitive
-- Check debug logs for region detection issues
+- Check that `Enabled` is true
+- Ensure WeType keyboard is active and visible
+- Check debug logs for gesture recognizer installation
+- Verify that swipe gestures aren't being intercepted by other apps
 
-### Wrong action triggered
-- Verify region detection in debug logs
-- Adjust region boundaries if needed (geometric heuristics)
-- Check if accessibility labels are available for better accuracy
+### Mode switching not working
+- Check debug logs for available modes detection
+- Verify WeType APIs are accessible (may vary by iOS version)
+- Ensure there are at least 2 input modes available
+- Check for mode switching errors in debug logs
+
+### Interference with typing
+- The implementation uses `cancelsTouchesInView = NO` to minimize interference
+- If issues persist, check debug logs for gesture conflicts
+- Ensure swipe gestures are deliberate (not accidental while typing)
 
 ### Performance issues
-- Disable `DebugLog` in production
-- Increase `SwipeThreshold` to reduce false positives
-- Disable unused regions
+- Disable `DebugLog` in production builds
+- Check for excessive logging in debug mode
 
 ## Development
 
-The implementation is structured for extensibility:
+The implementation is structured for WeType-specific integration:
 
-- `WTKeyboardRegion` enum for easy addition of new regions
-- Modular action methods for each keyboard function
-- Comprehensive API discovery for WeType-specific methods
-- Fallback mechanisms for different WeType versions
+- `WTVerticalSwipeManager` handles gesture recognition and mode switching
+- WeType API discovery with multiple fallback selectors
+- Proper previous/next mode calculation with circular navigation
+- Comprehensive logging for debugging mode switching issues
+- Clean separation between gesture handling and mode management
 
 ## License
 
