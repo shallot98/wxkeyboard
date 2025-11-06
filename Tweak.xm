@@ -1040,6 +1040,9 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
         }
     }
     
+    // Re-read the state after potential update to ensure we have the latest directionLocked value
+    state = tracker.touchState;
+    
     if (state.directionLocked && !state.verticalSwipeDetected) {
         CGFloat absDy = fabs(dy);
         WTSLog(@"[%@] Vertical swipe in progress: dy=%.1f, absDy=%.1f, threshold=%.1f, detected=%d", 
