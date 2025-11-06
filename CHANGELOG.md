@@ -1,5 +1,22 @@
 # Changelog
 
+## Version 1.2.2
+
+### Critical Fix
+- **Fixed gesture blocked by original touch handler**: Modified touchesMoved hooks to conditionally block original handler when vertical swipe is detected
+- **Prevents IME interference**: When direction is locked to vertical, original touch processing is suppressed to prevent IME or other handlers from consuming the gesture
+
+### Technical Changes
+- WTSProcessTouchMovedForView now returns BOOL indicating if original handler should be blocked
+- Returns YES when vertical direction is locked or swipe is detected
+- Returns NO for horizontal movement or when no swipe is in progress
+- All touchesMoved hooks updated to check return value before calling %orig
+
+### Why This Matters
+- Some keyboard components (like IME content handlers) may consume touch events before gesture completion
+- By blocking original handler during vertical swipe, we ensure the gesture is not interrupted
+- Normal key taps and horizontal gestures still work normally (original handler is called)
+
 ## Version 1.2.1
 
 ### Critical Bug Fix

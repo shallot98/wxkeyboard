@@ -13,6 +13,7 @@ This tweak implements full-keyboard vertical swipe gestures for the WeType keybo
 5. **Debounce protection**: Prevents rapid-fire triggering (250ms minimum interval)
 6. **WeType-specific integration**: Uses WeType's internal mode manager for proper mode ordering
 7. **Comprehensive coverage**: Installs on multiple WeType view classes for full keyboard area support
+8. **IME interference prevention** (v1.2.2): Blocks original touch handlers during vertical swipe to prevent IME content processors from consuming the gesture
 
 ### Configuration
 

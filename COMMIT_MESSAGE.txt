@@ -1,0 +1,32 @@
+Fix vertical swipe gesture blocked by IME content handlers (v1.2.2)
+
+Problem:
+- Vertical swipe gestures were detected but not triggering mode switch
+- Original touch handlers (IME, key processors) were consuming events after our detection
+- User reported that "reports" in keyboard views contain full IME content
+
+Solution:
+- Modified WTSProcessTouchMovedForView to return BOOL indicating if original handler should be blocked
+- When vertical direction is locked, block original touchesMoved handler by not calling %orig
+- This prevents IME and other processors from interfering with gesture completion
+
+Changes:
+- Updated WTSProcessTouchMovedForView: void -> BOOL return type
+- Returns YES when direction is locked to vertical (blocks original handler)
+- Returns NO for horizontal movement or undetermined direction (allows original handler)
+- Updated all 5 touchesMoved hooks to conditionally call %orig based on return value
+
+Affected classes:
+- WBMainInputView
+- WBKeyboardView
+- WXKBKeyboardView
+- WXKBMainKeyboardView
+- WXKBKeyContainerView
+
+Benefits:
+- Vertical swipes now work reliably without IME interference
+- Normal key taps still work (original handler called)
+- Horizontal gestures unaffected
+- Better control over touch event processing chain
+
+Version: 1.2.1 -> 1.2.2

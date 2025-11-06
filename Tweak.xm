@@ -999,14 +999,14 @@ static void WTSInstallTouchTrackerIfNeeded(UIView *view) {
 @interface WXKBMainKeyboardView : UIView @end  // Main keyboard container
 @interface WXKBKeyContainerView : UIView @end  // Key container view
 
-static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches) {
+static BOOL WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches) {
     if (!view || touches.count == 0) {
-        return;
+        return NO;
     }
     
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(view, kWTTouchTrackerKey);
     if (!tracker) {
-        return;
+        return NO;
     }
     
     const WTConfiguration *config = WTCurrentConfiguration();
@@ -1036,7 +1036,7 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
                    NSStringFromClass(view.class), dx, dy);
             state.directionLocked = NO;
             tracker.touchState = state;
-            return;
+            return NO;
         }
     }
     
@@ -1056,7 +1056,7 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
                 WTSLog(@"[%@] Swipe detected but too soon since last trigger (%.3fs), ignoring", 
                        NSStringFromClass(view.class), currentTime - state.lastTriggerTime);
                 tracker.touchState = state;
-                return;
+                return YES;  // Block original handler to prevent interference
             }
             
             if (dy < 0) {
@@ -1071,8 +1071,12 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
             
             state.lastTriggerTime = currentTime;
             tracker.touchState = state;
+            return YES;  // Block original handler to prevent triggering keys
         }
     }
+    
+    // Return YES if direction is locked to vertical to prevent key activation
+    return state.directionLocked;
 }
 
 %group WTSWeTypeHooks
@@ -1106,8 +1110,12 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTSProcessTouchMovedForView(self, touches);
-    %orig;
+    BOOL shouldBlock = WTSProcessTouchMovedForView(self, touches);
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesMoved due to vertical swipe", NSStringFromClass(self.class));
+    }
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -1164,8 +1172,12 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTSProcessTouchMovedForView(self, touches);
-    %orig;
+    BOOL shouldBlock = WTSProcessTouchMovedForView(self, touches);
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesMoved due to vertical swipe", NSStringFromClass(self.class));
+    }
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -1234,8 +1246,12 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTSProcessTouchMovedForView(self, touches);
-    %orig;
+    BOOL shouldBlock = WTSProcessTouchMovedForView(self, touches);
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesMoved due to vertical swipe", NSStringFromClass(self.class));
+    }
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -1292,8 +1308,12 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTSProcessTouchMovedForView(self, touches);
-    %orig;
+    BOOL shouldBlock = WTSProcessTouchMovedForView(self, touches);
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesMoved due to vertical swipe", NSStringFromClass(self.class));
+    }
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -1350,8 +1370,12 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTSProcessTouchMovedForView(self, touches);
-    %orig;
+    BOOL shouldBlock = WTSProcessTouchMovedForView(self, touches);
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesMoved due to vertical swipe", NSStringFromClass(self.class));
+    }
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
