@@ -8,10 +8,6 @@
     <key>DebugLog</key>
     <true/>
     
-    <!-- Global swipe toggle for language switching -->
-    <key>GlobalSwipe</key>
-    <true/>
-    
     <!-- Region-specific swipe feature -->
     <key>RegionSwipe</key>
     <true/>
