@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Enabled</key>
+    <true/>
+    
+    <key>DebugLog</key>
+    <true/>
+    
+    <!-- Region-specific swipe feature -->
+    <key>RegionSwipe</key>
+    <true/>
+    
+    <!-- Minimum vertical distance for swipe detection (points) -->
+    <key>SwipeThreshold</key>
+    <real>25.0</real>
+    
+    <!-- Enable/disable specific regions -->
+    <key>NineKeyEnabled</key>
+    <true/>
+    
+    <key>NumberKeyEnabled</key>
+    <true/>
+    
+    <key>SpacebarEnabled</key>
+    <true/>
+</dict>
+</plist>
