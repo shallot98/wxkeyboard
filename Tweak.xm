@@ -26,7 +26,6 @@
 
 static const CGFloat kWTVerticalTranslationThreshold = 25.0;
 static const CGFloat kWTHorizontalTranslationTolerance = 12.0;
-static const CGFloat kWTMaximumAngleDegrees = 20.0;
 
 static NSString *const kWTPreferencesDomain = @"com.yourcompany.wxkeyboard";
 static NSString *const kWTLogFilePath = @"/var/mobile/Library/Preferences/wxkeyboard.log";
@@ -37,6 +36,7 @@ typedef struct {
     BOOL enabled;
     BOOL debugLog;
     BOOL regionSwipe;
+    BOOL globalSwipeEnabled;
     CGFloat swipeThreshold;
     BOOL nineKeyEnabled;
     BOOL numberKeyEnabled;
@@ -107,6 +107,7 @@ static const WTConfiguration *WTCurrentConfiguration(void) {
         configuration.enabled = WTReadPreferenceBool(@"Enabled", YES);
         configuration.debugLog = WTReadPreferenceBool(@"DebugLog", YES);
         configuration.regionSwipe = WTReadPreferenceBool(@"RegionSwipe", YES);
+        configuration.globalSwipeEnabled = WTReadPreferenceBool(@"GlobalSwipe", YES);
         configuration.swipeThreshold = WTReadPreferenceFloat(@"SwipeThreshold", 25.0);
         configuration.nineKeyEnabled = WTReadPreferenceBool(@"NineKeyEnabled", YES);
         configuration.numberKeyEnabled = WTReadPreferenceBool(@"NumberKeyEnabled", YES);
@@ -265,9 +266,10 @@ static void WTLogLaunchDiagnostics(void) {
     NSString *bundlePath = [NSBundle mainBundle].bundlePath ?: @"";
     NSString *execPath = WTExecutablePath();
     NSString *processName = WTProcessName();
-    WTSLog(@"Launch diagnostics: enabled=%@ debugLog=%@ regionSwipe=%@ swipeThreshold=%.1f nineKey=%@ numberKey=%@ spacebar=%@ processName=%@ bundleIdentifier=%@ bundlePath=%@ execPath=%@",
+    WTSLog(@"Launch diagnostics: enabled=%@ debugLog=%@ globalSwipe=%@ regionSwipe=%@ swipeThreshold=%.1f nineKey=%@ numberKey=%@ spacebar=%@ processName=%@ bundleIdentifier=%@ bundlePath=%@ execPath=%@",
            configuration->enabled ? @"YES" : @"NO",
            configuration->debugLog ? @"YES" : @"NO",
+           configuration->globalSwipeEnabled ? @"YES" : @"NO",
            configuration->regionSwipe ? @"YES" : @"NO",
            configuration->swipeThreshold,
            configuration->nineKeyEnabled ? @"YES" : @"NO",
@@ -405,6 +407,7 @@ static inline NSString *WTSPrimaryLanguageFromMode(id mode) {
 }
 
 static BOOL gWTKeyboardImplDiagnosticsLogged = NO;
+static BOOL gWTVoiceOverSuppressedLogged = NO;
 
 static void WTMaybeEmitKeyboardImplDiagnostics(id keyboardImpl, NSString *entryPoint, id mode) {
     if (!WTDebugLogEnabled() || gWTKeyboardImplDiagnosticsLogged) {
@@ -492,22 +495,32 @@ static BOOL WTSProcessIsWeTypeKeyboard(void) {
     return shouldInstall;
 }
 
+static CGFloat WTSResolvedSwipeThreshold(const WTConfiguration *configuration) {
+    if (!configuration) {
+        return kWTVerticalTranslationThreshold;
+    }
+    CGFloat threshold = configuration->swipeThreshold;
+    if (threshold <= 0.0f) {
+        threshold = kWTVerticalTranslationThreshold;
+    }
+    return threshold;
+}
+
 static BOOL WTSIsApproxVertical(CGPoint translation) {
+    const WTConfiguration *config = WTCurrentConfiguration();
     CGFloat dy = fabs(translation.y);
     CGFloat dx = fabs(translation.x);
-    const WTConfiguration *config = WTCurrentConfiguration();
-    CGFloat threshold = config->regionSwipe ? config->swipeThreshold : kWTVerticalTranslationThreshold;
+    CGFloat threshold = WTSResolvedSwipeThreshold(config);
     if (dy < threshold) {
         return NO;
     }
-    if (dx > kWTHorizontalTranslationTolerance) {
+    if (dy <= dx) {
         return NO;
     }
-    if (dy == 0.0) {
+    if (dx > kWTHorizontalTranslationTolerance && (dy - dx) < (kWTHorizontalTranslationTolerance * 0.5f)) {
         return NO;
     }
-    CGFloat angle = (CGFloat)(atan2(dx, dy) * (180.0 / M_PI));
-    return angle <= kWTMaximumAngleDegrees;
+    return YES;
 }
 
 static BOOL WTSClassNameMatchesHints(NSString *className) {
@@ -731,6 +744,29 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     return nil;
 }
 
+static NSString *WTLanguageSummaryFromMode(id mode) {
+    if (!mode) {
+        return @"<none>";
+    }
+    NSString *language = WTSPrimaryLanguageFromMode(mode);
+    if (language.length > 0) {
+        return language;
+    }
+    NSString *description = [mode description];
+    return description.length > 0 ? description : @"<unknown>";
+}
+
+static NSString *WTLanguageSummaryForController(UIInputViewController *controller) {
+    if (!controller) {
+        return @"<none>";
+    }
+    id mode = WTSCurrentInputMode(controller);
+    if (mode) {
+        return WTLanguageSummaryFromMode(mode);
+    }
+    return @"<unknown>";
+}
+
 @interface WTLanguageSwipeManager : NSObject <UIGestureRecognizerDelegate>
 @property (nonatomic, weak) UIView *hostView;
 @property (nonatomic, strong) UIPanGestureRecognizer *panRecognizer;
@@ -739,6 +775,7 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
 @property (nonatomic, assign) BOOL didTrigger;
 @property (nonatomic, assign) CGFloat disabledLimit;
 @property (nonatomic, assign) WTKeyboardRegion detectedRegion;
+@property (nonatomic, assign) CGPoint capturedTranslation;
 @end
 
 @implementation WTLanguageSwipeManager
@@ -750,11 +787,14 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
         _panRecognizer = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
         _panRecognizer.maximumNumberOfTouches = 1;
         _panRecognizer.minimumNumberOfTouches = 1;
-        _panRecognizer.cancelsTouchesInView = YES;
+        _panRecognizer.cancelsTouchesInView = NO;
         _panRecognizer.delaysTouchesBegan = NO;
+        _panRecognizer.delaysTouchesEnded = NO;
         _panRecognizer.delegate = self;
         [hostView addGestureRecognizer:_panRecognizer];
         _disabledLimit = 0.0;
+        _capturedTranslation = CGPointZero;
+        _detectedRegion = WTKeyboardRegionUnknown;
         WTSLog(@"Gesture recognizer installed on %@", hostView);
     }
     return self;
@@ -775,34 +815,39 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     if (!self.hostView) {
         return NO;
     }
-    
-    // Ensure WeType keyboard is active and visible
-    UIInputViewController *controller = [[self class] inputControllerForResponder:self.hostView];
-    if (!controller) {
-        controller = [[self class] inputControllerForResponder:self.hostView.nextResponder];
+
+    const WTConfiguration *config = WTCurrentConfiguration();
+    if (!config->globalSwipeEnabled && !config->regionSwipe) {
+        return NO;
     }
+
+    if (UIAccessibilityIsVoiceOverRunning()) {
+        if (!gWTVoiceOverSuppressedLogged) {
+            WTSLog(@"VoiceOver active; suppressing language swipe recognizer.");
+            gWTVoiceOverSuppressedLogged = YES;
+        }
+        return NO;
+    }
+    gWTVoiceOverSuppressedLogged = NO;
+
+    UIInputViewController *controller = [self activeInputController];
     if (!controller) {
         return NO;
     }
-    
-    // Additional check: ensure the host view is actually visible and part of the keyboard
-    if (!self.hostView.window || self.hostView.hidden || self.hostView.alpha < 0.1) {
+
+    if (!self.hostView.window || self.hostView.hidden || self.hostView.alpha < 0.1f) {
         return NO;
     }
-    
+
+    self.detectedRegion = WTKeyboardRegionUnknown;
     [self refreshDisabledLimit];
     CGPoint location = [touch locationInView:self.hostView];
-    self.initialLocation = location;
-    self.initialTouchView = touch.view;
-    
-    // Detect the keyboard region for region-specific swipe
-    self.detectedRegion = WTDetectKeyboardRegion(touch.view, self.hostView, location);
-    
-    // Check if region-specific swipe is enabled and this region is enabled
-    const WTConfiguration *config = WTCurrentConfiguration();
-    if (config->regionSwipe) {
+    WTKeyboardRegion region = WTDetectKeyboardRegion(touch.view, self.hostView, location);
+
+    BOOL regionSwipeActive = config->regionSwipe && !config->globalSwipeEnabled;
+    if (regionSwipeActive) {
         BOOL regionEnabled = NO;
-        switch (self.detectedRegion) {
+        switch (region) {
             case WTKeyboardRegionNineKey:
                 regionEnabled = config->nineKeyEnabled;
                 break;
@@ -812,16 +857,17 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
             case WTKeyboardRegionSpacebar:
                 regionEnabled = config->spacebarEnabled;
                 break;
+            case WTKeyboardRegionUnknown:
             default:
                 regionEnabled = NO;
                 break;
         }
         if (!regionEnabled) {
-            WTSLog(@"Region %@ disabled, ignoring touch", WTStringFromKeyboardRegion(self.detectedRegion));
+            WTSLog(@"Region %@ disabled, ignoring touch", WTStringFromKeyboardRegion(region));
             return NO;
         }
     }
-    
+
     BOOL disabled = NO;
     if (self.disabledLimit > 0.0 && location.y <= self.disabledLimit) {
         disabled = YES;
@@ -829,25 +875,33 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     if (!disabled && WTSTouchViewIsDisabled(touch.view, self.hostView)) {
         disabled = YES;
     }
-    
-    // Additional safety: ignore touches on system UI elements like emoji/clipboard panels
+
     if (!disabled && touch.view) {
         NSString *className = NSStringFromClass(touch.view.class);
         if ([className containsString:@"UI"] && ([className containsString:@"Panel"] || [className containsString:@"Toolbar"] || [className containsString:@"Bar"])) {
             disabled = YES;
         }
     }
-    
+
     if (disabled) {
         WTSLog(@"Ignoring touch in disabled zone (%@) limit=%.2f", touch.view, self.disabledLimit);
         return NO;
     }
+
+    self.initialLocation = location;
+    self.initialTouchView = touch.view;
+    self.detectedRegion = region;
     self.didTrigger = NO;
+    self.capturedTranslation = CGPointZero;
     return YES;
 }
 
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
     if (!self.hostView) {
+        return NO;
+    }
+    const WTConfiguration *config = WTCurrentConfiguration();
+    if (!config->globalSwipeEnabled && !config->regionSwipe) {
         return NO;
     }
     UIPanGestureRecognizer *pan = (UIPanGestureRecognizer *)gestureRecognizer;
@@ -862,6 +916,23 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    if (gestureRecognizer != self.panRecognizer || !otherGestureRecognizer) {
+        return NO;
+    }
+    UIView *otherView = otherGestureRecognizer.view;
+    if (otherView && ![otherView isDescendantOfView:self.hostView]) {
+        return NO;
+    }
+    if ([otherGestureRecognizer isKindOfClass:[UILongPressGestureRecognizer class]] ||
+        [otherGestureRecognizer isKindOfClass:[UITapGestureRecognizer class]]) {
+        return YES;
+    }
+    NSString *className = NSStringFromClass(otherGestureRecognizer.class);
+    if ([className containsString:@"LongPress"] ||
+        [className containsString:@"Tap"] ||
+        [className containsString:@"Press"]) {
+        return YES;
+    }
     return NO;
 }
 
@@ -869,24 +940,38 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     if (!self.hostView) {
         return;
     }
+
+    const WTConfiguration *config = WTCurrentConfiguration();
+    if (!config->globalSwipeEnabled && !config->regionSwipe) {
+        return;
+    }
+
     if (recognizer.state == UIGestureRecognizerStateBegan) {
         self.initialLocation = [recognizer locationInView:self.hostView];
         self.initialTouchView = recognizer.view;
         self.didTrigger = NO;
-        WTSLog(@"Pan began in %@ at %@ region=%@", self.hostView, NSStringFromCGPoint(self.initialLocation), WTStringFromKeyboardRegion(self.detectedRegion));
+        self.capturedTranslation = CGPointZero;
+        NSString *modeSummary = [self currentModeSummary];
+        WTSLog(@"Pan began at %@ (region=%@, mode=%@)",
+               NSStringFromCGPoint(self.initialLocation),
+               WTStringFromKeyboardRegion(self.detectedRegion),
+               modeSummary);
         return;
     }
 
-    if (!self.didTrigger && (recognizer.state == UIGestureRecognizerStateChanged || recognizer.state == UIGestureRecognizerStateEnded)) {
-        CGPoint translation = [recognizer translationInView:self.hostView];
+    CGPoint translation = [recognizer translationInView:self.hostView];
+
+    if (!self.didTrigger &&
+        (recognizer.state == UIGestureRecognizerStateChanged ||
+         recognizer.state == UIGestureRecognizerStateEnded)) {
         if (WTSIsApproxVertical(translation)) {
-            WTSLog(@"Detected vertical swipe translation %@ in region %@", NSStringFromCGPoint(translation), WTStringFromKeyboardRegion(self.detectedRegion));
-            
+            UIInputViewController *controller = [self activeInputController];
+            NSString *beforeMode = WTLanguageSummaryForController(controller);
             BOOL success = NO;
-            const WTConfiguration *config = WTCurrentConfiguration();
-            
-            if (config->regionSwipe) {
-                // Use region-specific actions
+
+            if (config->globalSwipeEnabled) {
+                success = [[self class] triggerLanguageToggleForHostView:self.hostView];
+            } else if (config->regionSwipe) {
                 switch (self.detectedRegion) {
                     case WTKeyboardRegionNineKey:
                         success = [[self class] triggerLanguageToggleForHostView:self.hostView];
@@ -897,19 +982,36 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
                     case WTKeyboardRegionSpacebar:
                         success = [[self class] triggerSymbolSwitchForHostView:self.hostView];
                         break;
+                    case WTKeyboardRegionUnknown:
                     default:
-                        // Fallback to language toggle for unknown regions
                         success = [[self class] triggerLanguageToggleForHostView:self.hostView];
                         break;
                 }
             } else {
-                // Use original behavior (language toggle only)
                 success = [[self class] triggerLanguageToggleForHostView:self.hostView];
             }
-            
+
             if (success) {
                 self.didTrigger = YES;
+                self.capturedTranslation = translation;
+                NSString *afterMode = WTLanguageSummaryForController(controller);
+                NSString *direction = translation.y < 0.0 ? @"Up" : @"Down";
+                WTSLog(@"Gesture triggered (%@) dy=%.1f dx=%.1f region=%@ mode=%@ -> %@",
+                       direction,
+                       translation.y,
+                       translation.x,
+                       WTStringFromKeyboardRegion(self.detectedRegion),
+                       beforeMode,
+                       afterMode);
                 [recognizer setTranslation:CGPointZero inView:self.hostView];
+            } else {
+                NSString *direction = translation.y < 0.0 ? @"Up" : @"Down";
+                WTSLog(@"Gesture vertical but action failed (%@) dy=%.1f dx=%.1f region=%@ mode=%@",
+                       direction,
+                       translation.y,
+                       translation.x,
+                       WTStringFromKeyboardRegion(self.detectedRegion),
+                       beforeMode);
             }
         }
     }
@@ -917,12 +1019,61 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     if (recognizer.state == UIGestureRecognizerStateCancelled ||
         recognizer.state == UIGestureRecognizerStateFailed ||
         recognizer.state == UIGestureRecognizerStateEnded) {
-        if (self.didTrigger) {
-            WTSLog(@"Pan finished after action in region %@", WTStringFromKeyboardRegion(self.detectedRegion));
+        BOOL triggered = self.didTrigger;
+        CGPoint loggedTranslation = triggered ? self.capturedTranslation : translation;
+        NSString *direction = loggedTranslation.y < 0.0 ? @"Up" : (loggedTranslation.y > 0.0 ? @"Down" : @"None");
+        NSString *modeSummary = [self currentModeSummary];
+
+        if (recognizer.state == UIGestureRecognizerStateEnded) {
+            if (triggered) {
+                WTSLog(@"Pan ended after toggle (direction=%@ dy=%.1f dx=%.1f region=%@ mode=%@)",
+                       direction,
+                       loggedTranslation.y,
+                       loggedTranslation.x,
+                       WTStringFromKeyboardRegion(self.detectedRegion),
+                       modeSummary);
+            } else {
+                CGFloat threshold = WTSResolvedSwipeThreshold(config);
+                BOOL vertical = WTSIsApproxVertical(loggedTranslation);
+                WTSLog(@"Pan ended without action (direction=%@ dy=%.1f dx=%.1f threshold=%.1f vertical=%@ region=%@ mode=%@)",
+                       direction,
+                       loggedTranslation.y,
+                       loggedTranslation.x,
+                       threshold,
+                       vertical ? @"YES" : @"NO",
+                       WTStringFromKeyboardRegion(self.detectedRegion),
+                       modeSummary);
+            }
+        } else {
+            NSString *stateName = recognizer.state == UIGestureRecognizerStateCancelled ? @"cancelled" : @"failed";
+            WTSLog(@"Pan %@ (triggered=%@ direction=%@ dy=%.1f dx=%.1f region=%@ mode=%@)",
+                   stateName,
+                   triggered ? @"YES" : @"NO",
+                   direction,
+                   loggedTranslation.y,
+                   loggedTranslation.x,
+                   WTStringFromKeyboardRegion(self.detectedRegion),
+                   modeSummary);
         }
+
         self.didTrigger = NO;
         self.initialTouchView = nil;
+        self.capturedTranslation = CGPointZero;
+        self.detectedRegion = WTKeyboardRegionUnknown;
+        self.initialLocation = CGPointZero;
     }
+}
+
+- (UIInputViewController *)activeInputController {
+    UIInputViewController *controller = [[self class] inputControllerForResponder:self.hostView];
+    if (!controller && self.hostView.nextResponder) {
+        controller = [[self class] inputControllerForResponder:self.hostView.nextResponder];
+    }
+    return controller;
+}
+
+- (NSString *)currentModeSummary {
+    return WTLanguageSummaryForController([self activeInputController]);
 }
 
 + (UIInputViewController *)inputControllerForResponder:(UIResponder *)responder {
