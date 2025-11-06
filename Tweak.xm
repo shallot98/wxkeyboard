@@ -1312,6 +1312,8 @@ static void WTSInstallSwipeIfNeeded(UIView *view) {
 }
 %end
 
+%end
+
 %ctor {
     @autoreleasepool {
         WTLogLaunchDiagnostics();
