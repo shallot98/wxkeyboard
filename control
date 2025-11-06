@@ -1,7 +1,7 @@
 Package: com.ctonew.wetypeswipe
 Name: WeType Vertical Swipe Toggle
 Architecture: iphoneos-arm
-Version: 1.0.0
+Version: 1.1.0
 Priority: optional
 Section: Tweaks
 Maintainer: cto.new <dev@cto.new>

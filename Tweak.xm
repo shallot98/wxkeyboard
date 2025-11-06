@@ -108,11 +108,7 @@ static inline BOOL WTFeatureEnabled(void) {
 }
 
 static inline BOOL WTDebugLogEnabled(void) {
-#ifdef DEBUG
     return WTCurrentConfiguration()->debugLog;
-#else
-    return NO;
-#endif
 }
 
 static NSString *WTCurrentBundleIdentifier(void) {
@@ -474,23 +470,23 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     if (self) {
         _hostView = hostView;
         
-        // Set up up swipe recognizer
+        // Set up up swipe recognizer with high priority to override WeType's built-in gestures
         _upSwipeRecognizer = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(handleUpSwipe:)];
         _upSwipeRecognizer.direction = UISwipeGestureRecognizerDirectionUp;
         _upSwipeRecognizer.numberOfTouchesRequired = 1;
-        _upSwipeRecognizer.cancelsTouchesInView = NO;
+        _upSwipeRecognizer.cancelsTouchesInView = YES; // Cancel touch events to override button actions
         _upSwipeRecognizer.delegate = self;
         [hostView addGestureRecognizer:_upSwipeRecognizer];
         
-        // Set up down swipe recognizer
+        // Set up down swipe recognizer with high priority to override WeType's built-in gestures
         _downSwipeRecognizer = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(handleDownSwipe:)];
         _downSwipeRecognizer.direction = UISwipeGestureRecognizerDirectionDown;
         _downSwipeRecognizer.numberOfTouchesRequired = 1;
-        _downSwipeRecognizer.cancelsTouchesInView = NO;
+        _downSwipeRecognizer.cancelsTouchesInView = YES; // Cancel touch events to override button actions
         _downSwipeRecognizer.delegate = self;
         [hostView addGestureRecognizer:_downSwipeRecognizer];
         
-        WTSLog(@"Vertical swipe gesture recognizers installed on %@", hostView);
+        WTSLog(@"Vertical swipe gesture recognizers installed on %@ with touch cancellation enabled", hostView);
     }
     return self;
 }
@@ -506,6 +502,7 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
     if (!self.hostView) {
+        WTSLog(@"gestureRecognizer:shouldReceiveTouch: NO - hostView is nil");
         return NO;
     }
     
@@ -515,22 +512,54 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
         controller = [[self class] inputControllerForResponder:self.hostView.nextResponder];
     }
     if (!controller) {
+        WTSLog(@"gestureRecognizer:shouldReceiveTouch: NO - no input controller found");
         return NO;
     }
     
     // Additional check: ensure the host view is actually visible and part of the keyboard
     if (!self.hostView.window || self.hostView.hidden || self.hostView.alpha < 0.1) {
+        WTSLog(@"gestureRecognizer:shouldReceiveTouch: NO - hostView not visible");
         return NO;
     }
     
-    // Basic safety: ignore touches on system UI elements like emoji/clipboard panels
+    // Get touch location in hostView coordinates
+    CGPoint touchPoint = [touch locationInView:self.hostView];
+    CGFloat hostViewHeight = CGRectGetHeight(self.hostView.bounds);
+    
+    // Exclude top toolbar area (approximately top 20% or first 44 points, whichever is larger)
+    CGFloat toolbarHeight = MAX(hostViewHeight * 0.2, 44.0);
+    if (touchPoint.y < toolbarHeight) {
+        WTSLog(@"gestureRecognizer:shouldReceiveTouch: NO - touch in toolbar area (y=%.1f, toolbarHeight=%.1f)", touchPoint.y, toolbarHeight);
+        return NO;
+    }
+    
+    // Check if touch.view is part of toolbar by class name
     if (touch.view) {
         NSString *className = NSStringFromClass(touch.view.class);
-        if ([className containsString:@"UI"] && ([className containsString:@"Panel"] || [className containsString:@"Toolbar"] || [className containsString:@"Bar"])) {
+        // Exclude WeType's toolbar views
+        if ([className containsString:@"Toolbar"] || [className containsString:@"ToolBar"] || 
+            [className containsString:@"TopBar"] || [className containsString:@"NavigationBar"]) {
+            WTSLog(@"gestureRecognizer:shouldReceiveTouch: NO - touch on toolbar view: %@", className);
             return NO;
+        }
+        
+        // Also check the superview hierarchy for toolbar
+        UIView *parentView = touch.view.superview;
+        NSInteger depth = 0;
+        while (parentView && depth < 5) {
+            NSString *parentClassName = NSStringFromClass(parentView.class);
+            if ([parentClassName containsString:@"Toolbar"] || [parentClassName containsString:@"ToolBar"] || 
+                [parentClassName containsString:@"TopBar"] || [parentClassName containsString:@"NavigationBar"]) {
+                WTSLog(@"gestureRecognizer:shouldReceiveTouch: NO - touch view parent is toolbar: %@", parentClassName);
+                return NO;
+            }
+            parentView = parentView.superview;
+            depth++;
         }
     }
     
+    WTSLog(@"gestureRecognizer:shouldReceiveTouch: YES - touch at (%.1f, %.1f) in view %@", 
+           touchPoint.x, touchPoint.y, touch.view ? NSStringFromClass(touch.view.class) : @"<nil>");
     return YES;
 }
 
@@ -719,6 +748,57 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     return [mode description];
 }
 
++ (BOOL)isChineseMode:(id)mode {
+    if (!mode) {
+        return NO;
+    }
+    
+    NSString *displayName = [self getModeDisplayName:mode];
+    NSString *lowerName = [displayName lowercaseString];
+    
+    // Check if mode is Chinese by various indicators
+    return [lowerName containsString:@"chinese"] || 
+           [lowerName containsString:@"zh"] || 
+           [lowerName containsString:@"中文"] ||
+           [lowerName containsString:@"简体"] ||
+           [lowerName containsString:@"繁体"] ||
+           [lowerName containsString:@"拼音"] ||
+           [lowerName containsString:@"pinyin"];
+}
+
++ (BOOL)isEnglishMode:(id)mode {
+    if (!mode) {
+        return NO;
+    }
+    
+    NSString *displayName = [self getModeDisplayName:mode];
+    NSString *lowerName = [displayName lowercaseString];
+    
+    // Check if mode is English by various indicators
+    return [lowerName containsString:@"english"] || 
+           [lowerName containsString:@"en"] || 
+           [lowerName containsString:@"英文"] ||
+           [lowerName containsString:@"英语"];
+}
+
++ (id)findChineseMode:(NSArray *)modes {
+    for (id mode in modes) {
+        if ([self isChineseMode:mode]) {
+            return mode;
+        }
+    }
+    return nil;
+}
+
++ (id)findEnglishMode:(NSArray *)modes {
+    for (id mode in modes) {
+        if ([self isEnglishMode:mode]) {
+            return mode;
+        }
+    }
+    return nil;
+}
+
 + (void)switchToPreviousModeForHostView:(UIView *)hostView {
     UIInputViewController *controller = [self inputControllerForResponder:hostView];
     if (!controller) {
@@ -731,37 +811,64 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     
     NSArray *modes = [self getWeTypeInputModes:controller];
     if (!modes || modes.count < 2) {
-        WTSLog(@"Insufficient modes for previous/next switching (%ld available)", (long)(modes ? modes.count : 0));
+        WTSLog(@"Insufficient modes for switching (%ld available)", (long)(modes ? modes.count : 0));
         return;
     }
     
+    // Log all available modes for debugging
+    NSMutableArray *modeNames = [NSMutableArray array];
+    for (id mode in modes) {
+        [modeNames addObject:[self getModeDisplayName:mode]];
+    }
+    WTSLog(@"Available modes: %@", [modeNames componentsJoinedByString:@", "]);
+    
     id currentMode = [self getCurrentWeTypeInputMode:controller];
     NSString *currentModeName = [self getModeDisplayName:currentMode];
+    BOOL isCurrentChinese = [self isChineseMode:currentMode];
+    BOOL isCurrentEnglish = [self isEnglishMode:currentMode];
     
-    // Find current mode index
-    NSInteger currentIndex = -1;
-    if (currentMode) {
-        for (NSInteger i = 0; i < modes.count; i++) {
-            if (modes[i] == currentMode) {
-                currentIndex = i;
-                break;
-            }
+    WTSLog(@"Up swipe: Current mode=%@ (isChinese=%@ isEnglish=%@)", 
+           currentModeName, isCurrentChinese ? @"YES" : @"NO", isCurrentEnglish ? @"YES" : @"NO");
+    
+    // Find Chinese and English modes
+    id chineseMode = [self findChineseMode:modes];
+    id englishMode = [self findEnglishMode:modes];
+    
+    if (!chineseMode || !englishMode) {
+        WTSLog(@"Could not find both Chinese and English modes (chinese=%@ english=%@)", 
+               chineseMode ? @"found" : @"not found", englishMode ? @"found" : @"not found");
+        // Fallback to circular switching if we can't identify Chinese/English modes
+        NSInteger currentIndex = [modes indexOfObject:currentMode];
+        if (currentIndex == NSNotFound) {
+            currentIndex = 0;
         }
+        NSInteger previousIndex = currentIndex > 0 ? currentIndex - 1 : modes.count - 1;
+        id previousMode = modes[previousIndex];
+        NSString *previousModeName = [self getModeDisplayName:previousMode];
+        
+        if ([self setWeTypeInputMode:controller mode:previousMode]) {
+            WTSLog(@"Fallback: Switched to previous mode: %@ (from %@)", previousModeName, currentModeName);
+        } else {
+            WTSLog(@"Fallback: Failed to switch to previous mode: %@", previousModeName);
+        }
+        return;
     }
     
-    // Calculate previous index (circular)
-    NSInteger previousIndex = currentIndex > 0 ? currentIndex - 1 : modes.count - 1;
-    if (currentIndex == -1) {
-        previousIndex = modes.count - 1; // If current not found, go to last
-    }
-    
-    id previousMode = modes[previousIndex];
-    NSString *previousModeName = [self getModeDisplayName:previousMode];
-    
-    if ([self setWeTypeInputMode:controller mode:previousMode]) {
-        WTSLog(@"Switched to previous mode: %@ (from %@)", previousModeName, currentModeName);
+    // Toggle between Chinese and English only
+    id targetMode = nil;
+    if (isCurrentChinese) {
+        targetMode = englishMode;
+        WTSLog(@"Up swipe: Switching from Chinese to English");
     } else {
-        WTSLog(@"Failed to switch to previous mode: %@", previousModeName);
+        targetMode = chineseMode;
+        WTSLog(@"Up swipe: Switching to Chinese (current is not Chinese)");
+    }
+    
+    NSString *targetModeName = [self getModeDisplayName:targetMode];
+    if ([self setWeTypeInputMode:controller mode:targetMode]) {
+        WTSLog(@"Successfully switched to %@ (from %@)", targetModeName, currentModeName);
+    } else {
+        WTSLog(@"Failed to switch to %@", targetModeName);
     }
 }
 
@@ -777,37 +884,64 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     
     NSArray *modes = [self getWeTypeInputModes:controller];
     if (!modes || modes.count < 2) {
-        WTSLog(@"Insufficient modes for previous/next switching (%ld available)", (long)(modes ? modes.count : 0));
+        WTSLog(@"Insufficient modes for switching (%ld available)", (long)(modes ? modes.count : 0));
         return;
     }
     
+    // Log all available modes for debugging
+    NSMutableArray *modeNames = [NSMutableArray array];
+    for (id mode in modes) {
+        [modeNames addObject:[self getModeDisplayName:mode]];
+    }
+    WTSLog(@"Available modes: %@", [modeNames componentsJoinedByString:@", "]);
+    
     id currentMode = [self getCurrentWeTypeInputMode:controller];
     NSString *currentModeName = [self getModeDisplayName:currentMode];
+    BOOL isCurrentChinese = [self isChineseMode:currentMode];
+    BOOL isCurrentEnglish = [self isEnglishMode:currentMode];
     
-    // Find current mode index
-    NSInteger currentIndex = -1;
-    if (currentMode) {
-        for (NSInteger i = 0; i < modes.count; i++) {
-            if (modes[i] == currentMode) {
-                currentIndex = i;
-                break;
-            }
+    WTSLog(@"Down swipe: Current mode=%@ (isChinese=%@ isEnglish=%@)", 
+           currentModeName, isCurrentChinese ? @"YES" : @"NO", isCurrentEnglish ? @"YES" : @"NO");
+    
+    // Find Chinese and English modes
+    id chineseMode = [self findChineseMode:modes];
+    id englishMode = [self findEnglishMode:modes];
+    
+    if (!chineseMode || !englishMode) {
+        WTSLog(@"Could not find both Chinese and English modes (chinese=%@ english=%@)", 
+               chineseMode ? @"found" : @"not found", englishMode ? @"found" : @"not found");
+        // Fallback to circular switching if we can't identify Chinese/English modes
+        NSInteger currentIndex = [modes indexOfObject:currentMode];
+        if (currentIndex == NSNotFound) {
+            currentIndex = 0;
         }
+        NSInteger nextIndex = (currentIndex + 1) % modes.count;
+        id nextMode = modes[nextIndex];
+        NSString *nextModeName = [self getModeDisplayName:nextMode];
+        
+        if ([self setWeTypeInputMode:controller mode:nextMode]) {
+            WTSLog(@"Fallback: Switched to next mode: %@ (from %@)", nextModeName, currentModeName);
+        } else {
+            WTSLog(@"Fallback: Failed to switch to next mode: %@", nextModeName);
+        }
+        return;
     }
     
-    // Calculate next index (circular)
-    NSInteger nextIndex = (currentIndex + 1) % modes.count;
-    if (currentIndex == -1) {
-        nextIndex = 0; // If current not found, go to first
-    }
-    
-    id nextMode = modes[nextIndex];
-    NSString *nextModeName = [self getModeDisplayName:nextMode];
-    
-    if ([self setWeTypeInputMode:controller mode:nextMode]) {
-        WTSLog(@"Switched to next mode: %@ (from %@)", nextModeName, currentModeName);
+    // Toggle between Chinese and English only
+    id targetMode = nil;
+    if (isCurrentEnglish) {
+        targetMode = chineseMode;
+        WTSLog(@"Down swipe: Switching from English to Chinese");
     } else {
-        WTSLog(@"Failed to switch to next mode: %@", nextModeName);
+        targetMode = englishMode;
+        WTSLog(@"Down swipe: Switching to English (current is not English)");
+    }
+    
+    NSString *targetModeName = [self getModeDisplayName:targetMode];
+    if ([self setWeTypeInputMode:controller mode:targetMode]) {
+        WTSLog(@"Successfully switched to %@ (from %@)", targetModeName, currentModeName);
+    } else {
+        WTSLog(@"Failed to switch to %@", targetModeName);
     }
 }
 
