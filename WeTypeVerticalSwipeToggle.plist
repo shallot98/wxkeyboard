@@ -1,7 +1,20 @@
-{
-    Filter = {
-        Bundles = (
-            "com.tencent.wetype.keyboard"
-        );
-    };
-}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Filter</key>
+    <dict>
+        <key>Bundles</key>
+        <array>
+            <string>com.tencent.wetype</string>
+            <string>com.tencent.wetype.keyboard</string>
+        </array>
+        <key>Executables</key>
+        <array>
+            <string>WeTypeKeyboard</string>
+            <!-- TODO: Replace the string above with the confirmed WeType keyboard appex executable name once wxkeyboard diagnostics capture it. -->
+            <!-- DEBUG builds append UIKitApplication:com.tencent.wetype* fallbacks during staging for temporary diagnostics. -->
+        </array>
+    </dict>
+</dict>
+</plist>
