@@ -24,7 +24,7 @@
 - (id)textInputMode;
 @end
 
-static const CGFloat kWTVerticalTranslationThreshold = 22.0;
+static const CGFloat kWTVerticalTranslationThreshold = 25.0;
 static const CGFloat kWTHorizontalTranslationTolerance = 12.0;
 static const CGFloat kWTMaximumAngleDegrees = 20.0;
 
@@ -36,6 +36,11 @@ static const NSUInteger kWTLogRotateThresholdBytes = 256 * 1024;
 typedef struct {
     BOOL enabled;
     BOOL debugLog;
+    BOOL regionSwipe;
+    CGFloat swipeThreshold;
+    BOOL nineKeyEnabled;
+    BOOL numberKeyEnabled;
+    BOOL spacebarEnabled;
 } WTConfiguration;
 
 static BOOL WTInterpretBoolFromObject(id value, BOOL defaultValue) {
@@ -75,12 +80,37 @@ static BOOL WTReadPreferenceBool(NSString *key, BOOL defaultValue) {
     return result;
 }
 
+static CGFloat WTReadPreferenceFloat(NSString *key, CGFloat defaultValue) {
+    CGFloat result = defaultValue;
+    CFPropertyListRef valueRef = CFPreferencesCopyAppValue((__bridge CFStringRef)key, (__bridge CFStringRef)kWTPreferencesDomain);
+    if (valueRef) {
+        id value = CFBridgingRelease(valueRef);
+        if ([value isKindOfClass:[NSNumber class]]) {
+            result = ((NSNumber *)value).floatValue;
+        }
+    } else {
+        NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:kWTPreferencesDomain];
+        if (defaults) {
+            id value = [defaults objectForKey:key];
+            if (value && [value isKindOfClass:[NSNumber class]]) {
+                result = ((NSNumber *)value).floatValue;
+            }
+        }
+    }
+    return result;
+}
+
 static const WTConfiguration *WTCurrentConfiguration(void) {
     static dispatch_once_t onceToken;
     static WTConfiguration configuration;
     dispatch_once(&onceToken, ^{
         configuration.enabled = WTReadPreferenceBool(@"Enabled", YES);
         configuration.debugLog = WTReadPreferenceBool(@"DebugLog", YES);
+        configuration.regionSwipe = WTReadPreferenceBool(@"RegionSwipe", YES);
+        configuration.swipeThreshold = WTReadPreferenceFloat(@"SwipeThreshold", 25.0);
+        configuration.nineKeyEnabled = WTReadPreferenceBool(@"NineKeyEnabled", YES);
+        configuration.numberKeyEnabled = WTReadPreferenceBool(@"NumberKeyEnabled", YES);
+        configuration.spacebarEnabled = WTReadPreferenceBool(@"SpacebarEnabled", YES);
     });
     return &configuration;
 }
@@ -235,9 +265,14 @@ static void WTLogLaunchDiagnostics(void) {
     NSString *bundlePath = [NSBundle mainBundle].bundlePath ?: @"";
     NSString *execPath = WTExecutablePath();
     NSString *processName = WTProcessName();
-    WTSLog(@"Launch diagnostics: enabled=%@ debugLog=%@ processName=%@ bundleIdentifier=%@ bundlePath=%@ execPath=%@",
+    WTSLog(@"Launch diagnostics: enabled=%@ debugLog=%@ regionSwipe=%@ swipeThreshold=%.1f nineKey=%@ numberKey=%@ spacebar=%@ processName=%@ bundleIdentifier=%@ bundlePath=%@ execPath=%@",
            configuration->enabled ? @"YES" : @"NO",
            configuration->debugLog ? @"YES" : @"NO",
+           configuration->regionSwipe ? @"YES" : @"NO",
+           configuration->swipeThreshold,
+           configuration->nineKeyEnabled ? @"YES" : @"NO",
+           configuration->numberKeyEnabled ? @"YES" : @"NO",
+           configuration->spacebarEnabled ? @"YES" : @"NO",
            processName.length > 0 ? processName : @"<unknown>",
            bundleIdentifier.length > 0 ? bundleIdentifier : @"<none>",
            bundlePath.length > 0 ? bundlePath : @"<unknown>",
@@ -460,7 +495,9 @@ static BOOL WTSProcessIsWeTypeKeyboard(void) {
 static BOOL WTSIsApproxVertical(CGPoint translation) {
     CGFloat dy = fabs(translation.y);
     CGFloat dx = fabs(translation.x);
-    if (dy < kWTVerticalTranslationThreshold) {
+    const WTConfiguration *config = WTCurrentConfiguration();
+    CGFloat threshold = config->regionSwipe ? config->swipeThreshold : kWTVerticalTranslationThreshold;
+    if (dy < threshold) {
         return NO;
     }
     if (dx > kWTHorizontalTranslationTolerance) {
@@ -551,6 +588,121 @@ static BOOL WTSTouchViewIsDisabled(UIView *touchView, UIView *hostView) {
     return NO;
 }
 
+typedef NS_ENUM(NSInteger, WTKeyboardRegion) {
+    WTKeyboardRegionUnknown = 0,
+    WTKeyboardRegionNineKey,
+    WTKeyboardRegionNumberKey,
+    WTKeyboardRegionSpacebar
+};
+
+static WTKeyboardRegion WTDetectKeyboardRegion(UIView *touchView, UIView *hostView, CGPoint location) {
+    if (!touchView || !hostView) {
+        return WTKeyboardRegionUnknown;
+    }
+    
+    // Get the keyboard bounds for region calculations
+    CGRect keyboardBounds = hostView.bounds;
+    if (CGRectIsEmpty(keyboardBounds)) {
+        return WTKeyboardRegionUnknown;
+    }
+    
+    CGFloat keyboardHeight = CGRectGetHeight(keyboardBounds);
+    CGFloat keyboardWidth = CGRectGetWidth(keyboardBounds);
+    
+    // Get the actual touch location in host view coordinates
+    CGPoint actualLocation = [touchView convertPoint:CGPointMake(CGRectGetMidX(touchView.bounds), CGRectGetMidY(touchView.bounds)) toView:hostView];
+    
+    // First, try to identify by view class names and accessibility properties
+    NSString *className = NSStringFromClass(touchView.class);
+    NSString *viewDescription = [touchView description];
+    
+    // Check accessibility label and identifier if available
+    NSString *accessibilityLabel = nil;
+    NSString *accessibilityIdentifier = nil;
+    if ([touchView respondsToSelector:@selector(accessibilityLabel)]) {
+        accessibilityLabel = [(UIView *)touchView accessibilityLabel];
+    }
+    if ([touchView respondsToSelector:@selector(accessibilityIdentifier)]) {
+        accessibilityIdentifier = [(UIView *)touchView accessibilityIdentifier];
+    }
+    
+    // Check for spacebar by various identifiers
+    if ([className containsString:@"Space"] || [className containsString:@"space"] ||
+        [viewDescription containsString:@"space"] || [viewDescription containsString:@"Space"] ||
+        (accessibilityLabel && [accessibilityLabel containsString:@"space"]) ||
+        (accessibilityIdentifier && [accessibilityIdentifier containsString:@"space"])) {
+        return WTKeyboardRegionSpacebar;
+    }
+    
+    // Check for number switch key
+    if ([className containsString:@"Number"] || [className containsString:@"123"] ||
+        [viewDescription containsString:@"number"] || [viewDescription containsString:@"123"] ||
+        (accessibilityLabel && ([accessibilityLabel containsString:@"number"] || [accessibilityLabel containsString:@"123"])) ||
+        (accessibilityIdentifier && ([accessibilityIdentifier containsString:@"number"] || [accessibilityIdentifier containsString:@"123"]))) {
+        return WTKeyboardRegionNumberKey;
+    }
+    
+    // Check for symbol/emoji keys
+    if ([className containsString:@"Symbol"] || [className containsString:@"Emoji"] ||
+        [viewDescription containsString:@"symbol"] || [viewDescription containsString:@"emoji"] ||
+        (accessibilityLabel && ([accessibilityLabel containsString:@"symbol"] || [accessibilityLabel containsString:@"emoji"])) ||
+        (accessibilityIdentifier && ([accessibilityIdentifier containsString:@"symbol"] || [accessibilityIdentifier containsString:@"emoji"]))) {
+        return WTKeyboardRegionSpacebar; // Treat symbol keys as spacebar region
+    }
+    
+    // Check for letter/character keys (part of nine-key area)
+    if ([className containsString:@"Key"] || [className containsString:@"Letter"] || [className containsString:@"Character"] ||
+        [viewDescription containsString:@"key"] || [viewDescription containsString:@"letter"] ||
+        (accessibilityLabel && ([accessibilityLabel containsString:@"key"] || [accessibilityLabel containsString:@"letter"]))) {
+        // Verify it's in the central area
+        if (actualLocation.y >= keyboardHeight * 0.25 && actualLocation.y <= keyboardHeight * 0.75 &&
+            actualLocation.x >= keyboardWidth * 0.05 && actualLocation.x <= keyboardWidth * 0.95) {
+            return WTKeyboardRegionNineKey;
+        }
+    }
+    
+    // Geometric region detection as fallback
+    // Define adaptive region boundaries based on keyboard size
+    CGRect nineKeyRegion = CGRectMake(keyboardWidth * 0.05, keyboardHeight * 0.25, keyboardWidth * 0.9, keyboardHeight * 0.5);
+    CGRect numberKeyRegion = CGRectMake(keyboardWidth * 0.02, keyboardHeight * 0.72, keyboardWidth * 0.25, keyboardHeight * 0.25);
+    CGRect spacebarRegion = CGRectMake(keyboardWidth * 0.1, keyboardHeight * 0.82, keyboardWidth * 0.8, keyboardHeight * 0.18);
+    
+    // Priority-based region checking
+    if (CGRectContainsPoint(spacebarRegion, actualLocation)) {
+        return WTKeyboardRegionSpacebar;
+    }
+    
+    if (CGRectContainsPoint(numberKeyRegion, actualLocation)) {
+        return WTKeyboardRegionNumberKey;
+    }
+    
+    if (CGRectContainsPoint(nineKeyRegion, actualLocation)) {
+        return WTKeyboardRegionNineKey;
+    }
+    
+    // Final fallback: check if it's roughly in the nine-key area by position
+    if (actualLocation.y >= keyboardHeight * 0.2 && actualLocation.y <= keyboardHeight * 0.8 &&
+        actualLocation.x >= keyboardWidth * 0.05 && actualLocation.x <= keyboardWidth * 0.95) {
+        return WTKeyboardRegionNineKey;
+    }
+    
+    return WTKeyboardRegionUnknown;
+}
+
+static NSString *WTStringFromKeyboardRegion(WTKeyboardRegion region) {
+    switch (region) {
+        case WTKeyboardRegionNineKey:
+            return @"NineKey";
+        case WTKeyboardRegionNumberKey:
+            return @"NumberKey";
+        case WTKeyboardRegionSpacebar:
+            return @"Spacebar";
+        case WTKeyboardRegionUnknown:
+        default:
+            return @"Unknown";
+    }
+}
+
 static id WTSCurrentInputMode(UIInputViewController *controller) {
     if (!controller) {
         return nil;
@@ -586,6 +738,7 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
 @property (nonatomic, weak) UIView *initialTouchView;
 @property (nonatomic, assign) BOOL didTrigger;
 @property (nonatomic, assign) CGFloat disabledLimit;
+@property (nonatomic, assign) WTKeyboardRegion detectedRegion;
 @end
 
 @implementation WTLanguageSwipeManager
@@ -622,10 +775,53 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     if (!self.hostView) {
         return NO;
     }
+    
+    // Ensure WeType keyboard is active and visible
+    UIInputViewController *controller = [[self class] inputControllerForResponder:self.hostView];
+    if (!controller) {
+        controller = [[self class] inputControllerForResponder:self.hostView.nextResponder];
+    }
+    if (!controller) {
+        return NO;
+    }
+    
+    // Additional check: ensure the host view is actually visible and part of the keyboard
+    if (!self.hostView.window || self.hostView.hidden || self.hostView.alpha < 0.1) {
+        return NO;
+    }
+    
     [self refreshDisabledLimit];
     CGPoint location = [touch locationInView:self.hostView];
     self.initialLocation = location;
     self.initialTouchView = touch.view;
+    
+    // Detect the keyboard region for region-specific swipe
+    self.detectedRegion = WTDetectKeyboardRegion(touch.view, self.hostView, location);
+    
+    // Check if region-specific swipe is enabled and this region is enabled
+    const WTConfiguration *config = WTCurrentConfiguration();
+    if (config->regionSwipe) {
+        BOOL regionEnabled = NO;
+        switch (self.detectedRegion) {
+            case WTKeyboardRegionNineKey:
+                regionEnabled = config->nineKeyEnabled;
+                break;
+            case WTKeyboardRegionNumberKey:
+                regionEnabled = config->numberKeyEnabled;
+                break;
+            case WTKeyboardRegionSpacebar:
+                regionEnabled = config->spacebarEnabled;
+                break;
+            default:
+                regionEnabled = NO;
+                break;
+        }
+        if (!regionEnabled) {
+            WTSLog(@"Region %@ disabled, ignoring touch", WTStringFromKeyboardRegion(self.detectedRegion));
+            return NO;
+        }
+    }
+    
     BOOL disabled = NO;
     if (self.disabledLimit > 0.0 && location.y <= self.disabledLimit) {
         disabled = YES;
@@ -633,6 +829,15 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     if (!disabled && WTSTouchViewIsDisabled(touch.view, self.hostView)) {
         disabled = YES;
     }
+    
+    // Additional safety: ignore touches on system UI elements like emoji/clipboard panels
+    if (!disabled && touch.view) {
+        NSString *className = NSStringFromClass(touch.view.class);
+        if ([className containsString:@"UI"] && ([className containsString:@"Panel"] || [className containsString:@"Toolbar"] || [className containsString:@"Bar"])) {
+            disabled = YES;
+        }
+    }
+    
     if (disabled) {
         WTSLog(@"Ignoring touch in disabled zone (%@) limit=%.2f", touch.view, self.disabledLimit);
         return NO;
@@ -668,15 +873,41 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
         self.initialLocation = [recognizer locationInView:self.hostView];
         self.initialTouchView = recognizer.view;
         self.didTrigger = NO;
-        WTSLog(@"Pan began in %@ at %@", self.hostView, NSStringFromCGPoint(self.initialLocation));
+        WTSLog(@"Pan began in %@ at %@ region=%@", self.hostView, NSStringFromCGPoint(self.initialLocation), WTStringFromKeyboardRegion(self.detectedRegion));
         return;
     }
 
     if (!self.didTrigger && (recognizer.state == UIGestureRecognizerStateChanged || recognizer.state == UIGestureRecognizerStateEnded)) {
         CGPoint translation = [recognizer translationInView:self.hostView];
         if (WTSIsApproxVertical(translation)) {
-            WTSLog(@"Detected vertical swipe translation %@", NSStringFromCGPoint(translation));
-            if ([[self class] triggerToggleForHostView:self.hostView]) {
+            WTSLog(@"Detected vertical swipe translation %@ in region %@", NSStringFromCGPoint(translation), WTStringFromKeyboardRegion(self.detectedRegion));
+            
+            BOOL success = NO;
+            const WTConfiguration *config = WTCurrentConfiguration();
+            
+            if (config->regionSwipe) {
+                // Use region-specific actions
+                switch (self.detectedRegion) {
+                    case WTKeyboardRegionNineKey:
+                        success = [[self class] triggerLanguageToggleForHostView:self.hostView];
+                        break;
+                    case WTKeyboardRegionNumberKey:
+                        success = [[self class] triggerNumericSwitchForHostView:self.hostView];
+                        break;
+                    case WTKeyboardRegionSpacebar:
+                        success = [[self class] triggerSymbolSwitchForHostView:self.hostView];
+                        break;
+                    default:
+                        // Fallback to language toggle for unknown regions
+                        success = [[self class] triggerLanguageToggleForHostView:self.hostView];
+                        break;
+                }
+            } else {
+                // Use original behavior (language toggle only)
+                success = [[self class] triggerLanguageToggleForHostView:self.hostView];
+            }
+            
+            if (success) {
                 self.didTrigger = YES;
                 [recognizer setTranslation:CGPointZero inView:self.hostView];
             }
@@ -687,7 +918,7 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
         recognizer.state == UIGestureRecognizerStateFailed ||
         recognizer.state == UIGestureRecognizerStateEnded) {
         if (self.didTrigger) {
-            WTSLog(@"Pan finished after toggle");
+            WTSLog(@"Pan finished after action in region %@", WTStringFromKeyboardRegion(self.detectedRegion));
         }
         self.didTrigger = NO;
         self.initialTouchView = nil;
@@ -874,7 +1105,7 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     return NO;
 }
 
-+ (BOOL)triggerToggleForHostView:(UIView *)hostView {
++ (BOOL)triggerLanguageToggleForHostView:(UIView *)hostView {
     if (!hostView) {
         return NO;
     }
@@ -907,6 +1138,181 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     }
 
     return [self fallbackToggleWithController:controller];
+}
+
++ (BOOL)triggerNumericSwitchForHostView:(UIView *)hostView {
+    if (!hostView) {
+        return NO;
+    }
+    UIInputViewController *controller = [self inputControllerForResponder:hostView];
+    if (!controller) {
+        controller = [self inputControllerForResponder:hostView.nextResponder];
+    }
+    if (!controller) {
+        WTSLog(@"No input controller found for numeric switch");
+        return NO;
+    }
+
+    // Try WeType-specific numeric switch methods
+    Class weTypeControllerClass = NSClassFromString(@"WBInputViewController");
+    if (weTypeControllerClass && ![controller isKindOfClass:weTypeControllerClass]) {
+        WTSLog(@"Not a WeType controller for numeric switch");
+        return NO;
+    }
+
+    NSArray<NSString *> *numericSelectors = @[
+        @"switchToNumericKeyboard",
+        @"switchToNumberKeyboard",
+        @"showNumericKeyboard",
+        @"presentNumericKeyboard:",
+        @"switchToNumbers",
+        @"switchToNumbers:",
+        @"showNumberKeyboard",
+        @"presentNumberKeyboard:",
+        @"setKeyboardTypeNumeric:",
+        @"setKeyboardTypeNumbers:",
+        @"changeKeyboardTypeToNumeric:",
+        @"changeKeyboardTypeToNumbers:"
+    ];
+
+    for (NSString *selectorName in numericSelectors) {
+        SEL selector = NSSelectorFromString(selectorName);
+        if ([controller respondsToSelector:selector]) {
+            WTSLog(@"Invoking numeric selector %@", selectorName);
+            if ([selectorName hasSuffix:@":"]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(controller, selector, nil);
+            } else {
+                ((void (*)(id, SEL))objc_msgSend)(controller, selector);
+            }
+            return YES;
+        }
+    }
+
+    // Try to find and press the numeric switch button
+    NSArray<NSString *> *buttonSelectors = @[
+        @"numericSwitchButton",
+        @"numberSwitchButton",
+        @"numbersButton",
+        @"numberKeyboardButton",
+        @"numericKeyboardButton",
+        @"switchToNumbersButton",
+        @"switchToNumericButton"
+    ];
+
+    for (NSString *selectorName in buttonSelectors) {
+        SEL selector = NSSelectorFromString(selectorName);
+        if ([controller respondsToSelector:selector]) {
+            id button = ((id (*)(id, SEL))objc_msgSend)(controller, selector);
+            if ([button isKindOfClass:[UIControl class]]) {
+                WTSLog(@"Sending UIControl event to numeric switch button (%@)", selectorName);
+                [button sendActionsForControlEvents:UIControlEventTouchUpInside];
+                return YES;
+            }
+        }
+    }
+
+    // Try generic keyboard type switching
+    SEL setKeyboardTypeSel = @selector(setKeyboardType:);
+    if ([controller respondsToSelector:setKeyboardTypeSel]) {
+        // UIKeyboardTypeNumbersAndPunctuation = 2, UIKeyboardTypeNumberPad = 4
+        WTSLog(@"Setting keyboard type to numeric");
+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(controller, setKeyboardTypeSel, 2); // NumbersAndPunctuation
+        return YES;
+    }
+
+    WTSLog(@"No numeric switch method found");
+    return NO;
+}
+
++ (BOOL)triggerSymbolSwitchForHostView:(UIView *)hostView {
+    if (!hostView) {
+        return NO;
+    }
+    UIInputViewController *controller = [self inputControllerForResponder:hostView];
+    if (!controller) {
+        controller = [self inputControllerForResponder:hostView.nextResponder];
+    }
+    if (!controller) {
+        WTSLog(@"No input controller found for symbol switch");
+        return NO;
+    }
+
+    // Try WeType-specific symbol switch methods
+    Class weTypeControllerClass = NSClassFromString(@"WBInputViewController");
+    if (weTypeControllerClass && ![controller isKindOfClass:weTypeControllerClass]) {
+        WTSLog(@"Not a WeType controller for symbol switch");
+        return NO;
+    }
+
+    NSArray<NSString *> *symbolSelectors = @[
+        @"switchToSymbolKeyboard",
+        @"switchToSymbolsKeyboard",
+        @"showSymbolKeyboard",
+        @"presentSymbolKeyboard:",
+        @"switchToSymbols",
+        @"switchToSymbols:",
+        @"showSymbolsKeyboard",
+        @"presentSymbolsKeyboard:",
+        @"setKeyboardTypeSymbols:",
+        @"setKeyboardTypeSymbol:",
+        @"changeKeyboardTypeToSymbol:",
+        @"changeKeyboardTypeToSymbols:",
+        @"showMoreSymbols",
+        @"showMoreSymbols:"
+    ];
+
+    for (NSString *selectorName in symbolSelectors) {
+        SEL selector = NSSelectorFromString(selectorName);
+        if ([controller respondsToSelector:selector]) {
+            WTSLog(@"Invoking symbol selector %@", selectorName);
+            if ([selectorName hasSuffix:@":"]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(controller, selector, nil);
+            } else {
+                ((void (*)(id, SEL))objc_msgSend)(controller, selector);
+            }
+            return YES;
+        }
+    }
+
+    // Try to find and press the symbol switch button
+    NSArray<NSString *> *buttonSelectors = @[
+        @"symbolSwitchButton",
+        @"symbolsButton",
+        @"symbolKeyboardButton",
+        @"symbolsKeyboardButton",
+        @"switchToSymbolsButton",
+        @"switchToSymbolButton",
+        @"moreSymbolsButton",
+        @"moreButton"
+    ];
+
+    for (NSString *selectorName in buttonSelectors) {
+        SEL selector = NSSelectorFromString(selectorName);
+        if ([controller respondsToSelector:selector]) {
+            id button = ((id (*)(id, SEL))objc_msgSend)(controller, selector);
+            if ([button isKindOfClass:[UIControl class]]) {
+                WTSLog(@"Sending UIControl event to symbol switch button (%@)", selectorName);
+                [button sendActionsForControlEvents:UIControlEventTouchUpInside];
+                return YES;
+            }
+        }
+    }
+
+    // Try generic keyboard type switching
+    SEL setKeyboardTypeSel = @selector(setKeyboardType:);
+    if ([controller respondsToSelector:setKeyboardTypeSel]) {
+        WTSLog(@"Setting keyboard type to symbols");
+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(controller, setKeyboardTypeSel, 5); // UIKeyboardTypeURL (approximate symbol keyboard)
+        return YES;
+    }
+
+    WTSLog(@"No symbol switch method found");
+    return NO;
+}
+
+// Backward compatibility method
++ (BOOL)triggerToggleForHostView:(UIView *)hostView {
+    return [self triggerLanguageToggleForHostView:hostView];
 }
 
 @end
