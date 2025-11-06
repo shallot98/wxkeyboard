@@ -1,5 +1,31 @@
 # Changelog
 
+## Version 1.2.1
+
+### Critical Bug Fix
+- **Fixed swipe gesture detection failure**: Removed touch event hooks from individual key views (WBKeyView, WXKBKeyView) which were preventing swipe detection
+- **Root cause**: Individual key views are too small (~40x40pt) to capture full swipe gestures. When user swipes, touch moves outside key bounds and touchesMoved stops being called
+- **Solution**: Only hook container views (WBMainInputView, WBKeyboardView, etc.) which are large enough to capture complete swipe gestures
+
+### Improvements
+- **Enhanced diagnostic logging**: Added view class names and bounds to all touch event logs for easier debugging
+- **Improved view filtering**: Updated WTSShouldInstallOnView to explicitly exclude individual key views
+- **Better log messages**: All touch logs now include view class name and operation context
+
+### What Works Now
+- ✓ Long-press functionality preserved (on all keys including bottom row)
+- ✓ Vertical swipe detection restored (up/down swipe to switch input modes)
+- ✓ Normal tap input unaffected
+- ✓ Works across entire keyboard area
+
+### Technical Details
+- Container views (200x100pt+) capture full gesture paths
+- Individual key views retain original touch handling for long-press gestures
+- Touch events properly propagate via %orig calls
+- No interference between swipe detection and key interactions
+
+See DIAGNOSTIC_FIX_SUMMARY.md for detailed root cause analysis and implementation notes.
+
 ## Version 1.2.0
 
 ### Major Changes

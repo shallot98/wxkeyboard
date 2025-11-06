@@ -1,0 +1,132 @@
+Version 1.2.1 - Critical Bug Fix Release
+
+================================================================================
+PROBLEM FIXED
+================================================================================
+
+Issue: After version 1.2.0, swipe gestures stopped working but long-press 
+       continued to function.
+
+Root Cause: Touch event hooks on individual key views (WBKeyView, WXKBKeyView)
+            prevented swipe detection because:
+            - Key views are too small (~40x40pt)
+            - When user swipes, touch moves outside key bounds
+            - UIKit stops calling touchesMoved on the key view
+            - Swipe detection never reaches threshold
+
+================================================================================
+SOLUTION IMPLEMENTED
+================================================================================
+
+1. REMOVED HOOKS on individual key views
+   ✗ WBKeyView - all touch methods removed
+   ✗ WXKBKeyView - all touch methods removed
+   
+   Reason: These views are too small to capture full swipe gestures
+
+2. KEPT HOOKS on container views (large enough to capture swipes)
+   ✓ WBMainInputView (main container)
+   ✓ WBKeyboardView (keyboard container)
+   ✓ WXKBKeyboardView (additional keyboard)
+   ✓ WXKBMainKeyboardView (main keyboard container)
+   ✓ WXKBKeyContainerView (key container)
+   ✓ WBInputViewController (view lifecycle)
+   ✓ UIKeyboardImpl (diagnostics)
+
+3. ENHANCED VIEW FILTERING
+   - WTSShouldInstallOnView now explicitly excludes individual key views
+   - Only installs on views >100x50pt (or >200x100pt for safety)
+   - Checks for "KeyView" in class name and excludes it
+
+4. IMPROVED LOGGING
+   - All logs now include view class name: [WBKeyboardView]
+   - Touch logs include view bounds: "bounds: 390.0x250.0"
+   - Movement logs show detailed dx/dy and threshold comparisons
+   - Easier to diagnose future issues
+
+================================================================================
+EXPECTED RESULTS
+================================================================================
+
+✓ Long-press works on all keys (preserved via %orig calls)
+✓ Swipe up/down works across entire keyboard
+✓ Normal taps input characters without interference
+✓ Slow swipes (~30pt) trigger mode switch
+✓ Fast swipes trigger mode switch
+✓ No accidental triggers during typing
+
+================================================================================
+FILES CHANGED
+================================================================================
+
+Modified:
+  - Tweak.xm (-208 lines, +97 lines)
+    * Removed WBKeyView hook block entirely
+    * Removed WXKBKeyView hook block entirely
+    * Updated WTSShouldInstallOnView filtering
+    * Enhanced logging throughout
+    
+  - CHANGELOG.md (+26 lines)
+    * Added Version 1.2.1 section
+    * Documented bug fix details
+    
+  - Makefile (version update)
+    * PACKAGE_VERSION: 1.2.0 → 1.2.1
+    
+  - control (version update)
+    * Version: 1.1.0 → 1.2.1
+
+Added:
+  - DIAGNOSTIC_FIX_SUMMARY.md (detailed Chinese analysis)
+  - IMPLEMENTATION_NOTES.md (technical details)
+  - CHANGES_SUMMARY.txt (this file)
+
+================================================================================
+TECHNICAL DETAILS
+================================================================================
+
+View Size Comparison:
+  Container views: ~200-390pt wide × 100-250pt tall ✓ Can capture swipes
+  Key views:       ~40pt wide × 40pt tall           ✗ Too small for swipes
+
+Touch Event Flow:
+  1. User touches keyboard
+  2. Touch delivered to container view (hooked for swipe detection)
+  3. Touch also delivered to key view (not hooked, preserves long-press)
+  4. If user swipes:
+     - Touch moves outside key bounds
+     - Container still receives touchesMoved (view is large)
+     - Swipe detected when threshold reached
+  5. If user taps/long-presses:
+     - Key's gesture recognizers fire normally
+     - Container sees no movement, doesn't interfere
+
+Hook Structure: 7 hooks, 8 %end (7 hooks + 1 group end)
+
+================================================================================
+DEPLOYMENT
+================================================================================
+
+Build: GitHub Actions with Randomblock1/theos-action@v1
+Architectures: arm64, arm64e
+Package: com.ctonew.wetypeswipe_1.2.1_iphoneos-arm.deb
+
+================================================================================
+TESTING CHECKLIST
+================================================================================
+
+Before deployment, verify:
+  [ ] Long-press on letters shows character variants
+  [ ] Long-press on space bar enables cursor movement
+  [ ] Long-press on delete key rapid-deletes
+  [ ] Swipe up switches to English mode
+  [ ] Swipe down switches to Chinese mode
+  [ ] Slow vertical swipes work
+  [ ] Fast vertical swipes work
+  [ ] Normal typing is not affected
+  [ ] Logs show container view names
+  [ ] Logs show complete touch movement tracking
+
+================================================================================
+END OF SUMMARY
+================================================================================
