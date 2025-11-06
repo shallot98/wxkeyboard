@@ -1,0 +1,43 @@
+Fix IME consuming gesture by blocking touchesEnded (v1.2.3)
+
+CRITICAL BUG: Version 1.2.2 only blocked touchesMoved, allowing IME to complete
+
+Problem:
+- User reported: "上下滑手势依旧不生效，WeChatKeyboardSwitch里面reports有微信输入法的全部内容"
+- Translation: "Vertical swipe gesture still doesn't work, reports contain all WeChat IME content"
+- Root cause: We blocked touchesMoved but ALWAYS called %orig in touchesEnded
+- IME handlers complete their processing in touchesEnded, consuming the gesture
+
+Why blocking touchesMoved wasn't enough:
+1. Touch sequence: touchesBegan → touchesMoved (multiple) → touchesEnded
+2. We detected vertical swipe and blocked touchesMoved ✓
+3. We triggered mode switch ✓
+4. BUT touchesEnded always called %orig ✗
+5. Original IME handler processed the complete touch sequence and consumed it
+
+Solution:
+- Track whether vertical swipe was detected in touchState.verticalSwipeDetected
+- In touchesEnded: Check if verticalSwipeDetected, block %orig if true
+- In touchesCancelled: Check if verticalSwipeDetected, block %orig if true
+- This completely hijacks the touch sequence when we detect a vertical swipe
+
+Changes in all 5 hooked classes:
+- WBMainInputView
+- WBKeyboardView
+- WXKBKeyboardView
+- WXKBMainKeyboardView
+- WXKBKeyContainerView
+
+Each hook now:
+- touchesBegan: Always call %orig (don't know gesture type yet)
+- touchesMoved: Block %orig if direction locked or swipe detected
+- touchesEnded: Block %orig if swipe was detected
+- touchesCancelled: Block %orig if swipe was detected
+
+Benefits:
+- Complete control over touch sequence during vertical swipe
+- IME handlers can't interfere anymore
+- Normal taps still work perfectly (no swipe detected → call %orig)
+- Horizontal gestures work normally (direction not locked → call %orig)
+
+Version: 1.2.2 -> 1.2.3

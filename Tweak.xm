@@ -1120,26 +1120,40 @@ static BOOL WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    BOOL shouldBlock = NO;
     if (tracker) {
-        WTSLog(@"[%@] Touch ended, resetting state", NSStringFromClass(self.class));
         WTTouchState state = tracker.touchState;
+        shouldBlock = state.verticalSwipeDetected;
+        WTSLog(@"[%@] Touch ended, resetting state (swipe detected: %@)", 
+               NSStringFromClass(self.class), shouldBlock ? @"YES" : @"NO");
         state.directionLocked = NO;
         state.verticalSwipeDetected = NO;
         tracker.touchState = state;
     }
-    %orig;
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesEnded due to completed vertical swipe", NSStringFromClass(self.class));
+    }
 }
 
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    BOOL shouldBlock = NO;
     if (tracker) {
-        WTSLog(@"[%@] Touch cancelled, resetting state", NSStringFromClass(self.class));
         WTTouchState state = tracker.touchState;
+        shouldBlock = state.verticalSwipeDetected;
+        WTSLog(@"[%@] Touch cancelled, resetting state (swipe detected: %@)", 
+               NSStringFromClass(self.class), shouldBlock ? @"YES" : @"NO");
         state.directionLocked = NO;
         state.verticalSwipeDetected = NO;
         tracker.touchState = state;
     }
-    %orig;
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesCancelled due to completed vertical swipe", NSStringFromClass(self.class));
+    }
 }
 %end
 
@@ -1182,26 +1196,40 @@ static BOOL WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    BOOL shouldBlock = NO;
     if (tracker) {
-        WTSLog(@"[%@] Touch ended, resetting state", NSStringFromClass(self.class));
         WTTouchState state = tracker.touchState;
+        shouldBlock = state.verticalSwipeDetected;
+        WTSLog(@"[%@] Touch ended, resetting state (swipe detected: %@)", 
+               NSStringFromClass(self.class), shouldBlock ? @"YES" : @"NO");
         state.directionLocked = NO;
         state.verticalSwipeDetected = NO;
         tracker.touchState = state;
     }
-    %orig;
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesEnded due to completed vertical swipe", NSStringFromClass(self.class));
+    }
 }
 
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    BOOL shouldBlock = NO;
     if (tracker) {
-        WTSLog(@"[%@] Touch cancelled, resetting state", NSStringFromClass(self.class));
         WTTouchState state = tracker.touchState;
+        shouldBlock = state.verticalSwipeDetected;
+        WTSLog(@"[%@] Touch cancelled, resetting state (swipe detected: %@)", 
+               NSStringFromClass(self.class), shouldBlock ? @"YES" : @"NO");
         state.directionLocked = NO;
         state.verticalSwipeDetected = NO;
         tracker.touchState = state;
     }
-    %orig;
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesCancelled due to completed vertical swipe", NSStringFromClass(self.class));
+    }
 }
 %end
 
@@ -1256,26 +1284,40 @@ static BOOL WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    BOOL shouldBlock = NO;
     if (tracker) {
-        WTSLog(@"[%@] Touch ended, resetting state", NSStringFromClass(self.class));
         WTTouchState state = tracker.touchState;
+        shouldBlock = state.verticalSwipeDetected;
+        WTSLog(@"[%@] Touch ended, resetting state (swipe detected: %@)", 
+               NSStringFromClass(self.class), shouldBlock ? @"YES" : @"NO");
         state.directionLocked = NO;
         state.verticalSwipeDetected = NO;
         tracker.touchState = state;
     }
-    %orig;
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesEnded due to completed vertical swipe", NSStringFromClass(self.class));
+    }
 }
 
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    BOOL shouldBlock = NO;
     if (tracker) {
-        WTSLog(@"[%@] Touch cancelled, resetting state", NSStringFromClass(self.class));
         WTTouchState state = tracker.touchState;
+        shouldBlock = state.verticalSwipeDetected;
+        WTSLog(@"[%@] Touch cancelled, resetting state (swipe detected: %@)", 
+               NSStringFromClass(self.class), shouldBlock ? @"YES" : @"NO");
         state.directionLocked = NO;
         state.verticalSwipeDetected = NO;
         tracker.touchState = state;
     }
-    %orig;
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesCancelled due to completed vertical swipe", NSStringFromClass(self.class));
+    }
 }
 %end
 
@@ -1318,26 +1360,40 @@ static BOOL WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    BOOL shouldBlock = NO;
     if (tracker) {
-        WTSLog(@"[%@] Touch ended, resetting state", NSStringFromClass(self.class));
         WTTouchState state = tracker.touchState;
+        shouldBlock = state.verticalSwipeDetected;
+        WTSLog(@"[%@] Touch ended, resetting state (swipe detected: %@)", 
+               NSStringFromClass(self.class), shouldBlock ? @"YES" : @"NO");
         state.directionLocked = NO;
         state.verticalSwipeDetected = NO;
         tracker.touchState = state;
     }
-    %orig;
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesEnded due to completed vertical swipe", NSStringFromClass(self.class));
+    }
 }
 
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    BOOL shouldBlock = NO;
     if (tracker) {
-        WTSLog(@"[%@] Touch cancelled, resetting state", NSStringFromClass(self.class));
         WTTouchState state = tracker.touchState;
+        shouldBlock = state.verticalSwipeDetected;
+        WTSLog(@"[%@] Touch cancelled, resetting state (swipe detected: %@)", 
+               NSStringFromClass(self.class), shouldBlock ? @"YES" : @"NO");
         state.directionLocked = NO;
         state.verticalSwipeDetected = NO;
         tracker.touchState = state;
     }
-    %orig;
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesCancelled due to completed vertical swipe", NSStringFromClass(self.class));
+    }
 }
 %end
 
@@ -1380,26 +1436,40 @@ static BOOL WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    BOOL shouldBlock = NO;
     if (tracker) {
-        WTSLog(@"[%@] Touch ended, resetting state", NSStringFromClass(self.class));
         WTTouchState state = tracker.touchState;
+        shouldBlock = state.verticalSwipeDetected;
+        WTSLog(@"[%@] Touch ended, resetting state (swipe detected: %@)", 
+               NSStringFromClass(self.class), shouldBlock ? @"YES" : @"NO");
         state.directionLocked = NO;
         state.verticalSwipeDetected = NO;
         tracker.touchState = state;
     }
-    %orig;
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesEnded due to completed vertical swipe", NSStringFromClass(self.class));
+    }
 }
 
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    BOOL shouldBlock = NO;
     if (tracker) {
-        WTSLog(@"[%@] Touch cancelled, resetting state", NSStringFromClass(self.class));
         WTTouchState state = tracker.touchState;
+        shouldBlock = state.verticalSwipeDetected;
+        WTSLog(@"[%@] Touch cancelled, resetting state (swipe detected: %@)", 
+               NSStringFromClass(self.class), shouldBlock ? @"YES" : @"NO");
         state.directionLocked = NO;
         state.verticalSwipeDetected = NO;
         tracker.touchState = state;
     }
-    %orig;
+    if (!shouldBlock) {
+        %orig;
+    } else {
+        WTSLog(@"[%@] Blocking original touchesCancelled due to completed vertical swipe", NSStringFromClass(self.class));
+    }
 }
 %end
 

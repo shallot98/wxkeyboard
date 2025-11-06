@@ -1,5 +1,22 @@
 # Changelog
 
+## Version 1.2.3
+
+### Critical Fix
+- **Fixed touchesEnded allowing IME to consume gesture**: Now blocks touchesEnded and touchesCancelled when vertical swipe is detected
+- **Complete touch sequence hijacking**: When a vertical swipe is detected, we now prevent the original handler from processing ANY part of the touch sequence (began → moved → ended)
+
+### Technical Changes
+- touchesEnded: Now checks if verticalSwipeDetected and blocks %orig if true
+- touchesCancelled: Now checks if verticalSwipeDetected and blocks %orig if true
+- This prevents IME content handlers from completing their processing after we've detected a swipe
+
+### Why This Matters
+- Previous version (1.2.2) only blocked touchesMoved, but touchesEnded was still calling %orig
+- IME handlers complete their processing in touchesEnded, which was consuming the gesture
+- Now we completely take over the touch sequence when a vertical swipe is detected
+- Normal taps still work (original handler is called when no swipe detected)
+
 ## Version 1.2.2
 
 ### Critical Fix
