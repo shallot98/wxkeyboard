@@ -1,0 +1,104 @@
+========================================
+WeType Vertical Swipe Toggle v1.0.1
+更新说明
+========================================
+
+【核心变更】
+✓ 移除区域特定键盘切换（数字键盘、符号键盘）
+✓ 统一为中英文键盘切换（在任何位置滑动都切换中英文）
+✓ 手势优先级提升至最高（覆盖原有滑动功能）
+✓ 日志功能增强（发布版本也启用，方便反馈）
+✓ 版本号：1.0.0 → 1.0.1
+
+【修改文件】
+- Tweak.xm    主要逻辑修改
+- control     版本号更新
+- Makefile    版本号更新
+- README.md   完全重写（中文）
+
+【新增文件】
+- CHANGELOG.md              详细变更记录
+- LOG_GUIDE.md              日志查看指南
+- UPDATE_SUMMARY_v1.0.1.md  技术总结
+- CHANGES_CN.txt            本文件
+
+【关键修改点】
+
+1. 手势优先级（Tweak.xm 第786行）
+   cancelsTouchesInView = NO → YES
+   → 最高优先级，覆盖原有功能
+
+2. 日志启用（Tweak.xm 第123行）
+   移除 #ifdef DEBUG 条件
+   → 发布版本也有日志
+
+3. 切换逻辑（Tweak.xm 第968-981行）
+   移除区域判断和不同键盘切换
+   → 统一为中英文切换
+
+4. 版本标识
+   所有日志添加 [v1.0.1] 标记
+   → 便于识别版本
+
+【行为变更】
+
+之前 v1.0.0:
+- 九宫格区域滑动 → 切换中英文 ✓
+- 数字按钮滑动   → 打开数字键盘
+- 符号按钮滑动   → 打开符号键盘
+- 空格键滑动     → 打开符号键盘
+
+现在 v1.0.1:
+- 任何区域滑动   → 切换中英文 ✓✓✓
+（除了顶部任务栏）
+
+【日志位置】
+主日志: /var/mobile/Library/Preferences/wxkeyboard.log
+备份:   /var/mobile/Library/Preferences/wxkeyboard.log.1
+
+【查看日志】
+tail -f /var/mobile/Library/Preferences/wxkeyboard.log
+
+【配置保留】
+所有 v1.0.0 配置兼容，但以下配置将被忽略：
+- RegionSwipe
+- NineKeyEnabled
+- NumberKeyEnabled
+- SpacebarEnabled
+
+推荐配置：
+defaults write com.yourcompany.wxkeyboard Enabled -bool true
+defaults write com.yourcompany.wxkeyboard DebugLog -bool true
+defaults write com.yourcompany.wxkeyboard GlobalSwipe -bool true
+defaults write com.yourcompany.wxkeyboard SwipeThreshold -float 25.0
+
+【安装方法】
+1. 从 GitHub Actions 下载 .deb 文件
+2. 使用 Filza 或包管理器安装
+3. 重启微信输入法
+   killall -9 WeType WeTypeKeyboard
+
+【测试要点】
+✓ 在数字按钮上滑动 → 应该切换中英文（不是打开数字键盘）
+✓ 在符号按钮上滑动 → 应该切换中英文（不是打开符号键盘）
+✓ 在任何按钮上滑动 → 应该切换中英文
+✓ 在顶部任务栏滑动 → 不应该有反应
+✓ 查看日志确认有 [v1.0.1] 标记
+
+【反馈问题时请提供】
+1. iOS 版本和越狱类型
+2. 微信输入法版本
+3. 详细操作步骤
+4. 日志内容（最后100行）:
+   tail -n 100 /var/mobile/Library/Preferences/wxkeyboard.log
+
+【注意事项】
+⚠ 手势优先级最高，会覆盖微信输入法原有的滑动功能
+⚠ 如果需要恢复原有功能，请卸载本插件
+⚠ 日志文件可能增大，建议定期清理
+
+========================================
+更新时间: 2024
+开发者: cto.new
+项目地址: GitHub (见 README.md)
+========================================

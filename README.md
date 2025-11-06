@@ -1,112 +1,192 @@
-# WeType Vertical Swipe with Region-Specific Mapping
+# WeType Vertical Swipe Toggle v1.0.1
 
-This tweak enables global vertical swipe gestures on the WeType keyboard to toggle between Chinese and English input modes, while optionally supporting region-specific swipe actions for numeric and symbol panels.
+这个插件为微信输入法（WeType）添加垂直滑动手势，通过上下滑动键盘区域快速切换中英文输入模式。
 
-## Features
+## 🆕 v1.0.1 重大更新
 
-### Global Language Swipe
+### 主要变更
+- **统一的中英文切换**：现在所有键盘区域（除顶部任务栏外）的上下滑动都只切换中英文，不再根据区域触发数字/符号键盘
+- **最高优先级**：手势识别器设置为最高优先级（`cancelsTouchesInView=YES`），覆盖微信输入法原有的滑动功能
+- **增强的日志系统**：在发布版本中也启用日志功能，方便用户反馈和调试
 
-- Swipe up or down anywhere on the keyboard surface to switch between Chinese and English input modes
-- Works alongside normal taps and long presses with per-gesture debouncing
-- Automatically disables when VoiceOver is active to respect accessibility workflows
+### 新增文档
+- [更新日志](CHANGELOG.md) - 详细的版本变更记录
+- [日志查看指南](LOG_GUIDE.md) - 如何查看和分析日志
 
-### Region-Specific Actions (optional)
+## 功能特性
 
-1. **Middle 9-key area**: Swipe up/down toggles between Chinese and English input modes
-2. **Bottom "switch to numbers" key**: Swipe up/down switches to the numeric keyboard
-3. **Spacebar**: Swipe up/down switches to the symbol keyboard
+### 垂直滑动手势
+- 在键盘任意区域（除顶部任务栏外）向上或向下滑动
+- 自动在中文和英文输入模式之间切换
+- 与普通点击和长按操作完全兼容
+- 自动适配 VoiceOver 辅助功能
 
-### Configuration
+### 智能区域检测
+- 顶部任务栏（候选词、工具栏）不响应滑动手势
+- 自动识别并排除表情、剪贴板等特殊面板
+- 多层检测机制确保准确性
 
-The tweak supports the following preferences (stored in `com.yourcompany.wxkeyboard`):
+### 安全特性
+- 仅在微信输入法激活时工作
+- 完整的错误处理和回退机制
+- 保留原有长按功能
+- 详细的日志记录便于故障排查
 
-- `Enabled` (bool): Master toggle for the entire tweak (default: true)
-- `DebugLog` (bool): Enable debug logging (default: true)
-- `GlobalSwipe` (bool): Allow swipe up/down anywhere on the keyboard surface to toggle Chinese/English modes (default: true)
-- `SwipeThreshold` (float): Minimum vertical distance for swipe detection in points (default: 25.0)
-- `RegionSwipe` (bool): Enable region-specific routing (numeric/symbol) when global swipe is disabled (default: true)
-- `NineKeyEnabled` (bool): Enable region swipe in the 9-key area when `RegionSwipe` is true (default: true)
-- `NumberKeyEnabled` (bool): Enable region swipe on the number switch key when `RegionSwipe` is true (default: true)
-- `SpacebarEnabled` (bool): Enable region swipe on the spacebar when `RegionSwipe` is true (default: true)
+## 配置选项
 
-### Example Preferences
+插件支持以下配置（存储在 `com.yourcompany.wxkeyboard`）：
 
-See `preferences_example.plist` for a complete example configuration.
+- `Enabled` (bool): 主开关 (默认: true)
+- `DebugLog` (bool): 启用调试日志 (默认: true，v1.0.1+ 在发布版本也启用)
+- `GlobalSwipe` (bool): 全局滑动切换中英文 (默认: true)
+- `SwipeThreshold` (float): 滑动距离阈值，单位像素 (默认: 25.0)
 
-## Implementation Details
+**注意**：v1.0.1 移除了区域特定的键盘切换功能，以下配置已不再使用：
+- `RegionSwipe`、`NineKeyEnabled`、`NumberKeyEnabled`、`SpacebarEnabled`
 
-### Gesture Recognition
+## 安装
 
-- Uses a single `UIPanGestureRecognizer` attached to the top-level keyboard container view
-- Detects vertical movement using a configurable threshold while ensuring the vertical component dominates horizontal motion
-- Coexists with taps and long-press gestures, and logs gesture begin/end decisions (with dx/dy and active mode) when debug logging is enabled
-- Debounced to trigger at most once per gesture and automatically resets after cancellation or failure
-- Skips recognition when VoiceOver is active to preserve accessibility workflows
+### 从源码构建
+```bash
+# 项目使用 GitHub Actions 自动构建
+# 推送到 GitHub 后会自动生成 .deb 包
+```
 
-### Region Detection
+### 手动安装
+1. 从 [Releases](../../releases) 下载最新的 `.deb` 文件
+2. 使用 Filza 或其他包管理器安装
+3. 重启微信输入法
+4. 开始使用！
 
-The region detection uses a multi-layered approach:
+## 使用方法
 
-1. **Accessibility Properties**: Checks `accessibilityLabel` and `accessibilityIdentifier`
-2. **Class Name Analysis**: Matches view class names against known patterns
-3. **Geometric Heuristics**: Uses keyboard layout proportions as fallback
+1. 打开任何支持微信输入法的应用
+2. 激活键盘
+3. 在键盘区域（除顶部任务栏外）向上或向下滑动
+4. 输入法将自动在中文和英文之间切换
 
-### Safety Features
+## 兼容性
 
-- Only activates when WeType keyboard is active and visible
-- Excludes emoji/clipboard/toolbar panels from triggering
-- Preserves existing long-press functionality
-- Comprehensive error handling and fallbacks
+- **输入法**: WeType (微信输入法) `com.tencent.wetype.keyboard`
+- **iOS版本**: iOS 13+ (测试环境: iOS 16+)
+- **越狱类型**: 支持 rootless 越狱
+- **架构**: arm64, arm64e
 
-## Installation
+## 日志和调试
 
-1. Build the tweak using Theos
-2. Install on a jailbroken device
-3. Configure preferences using a preferences editor or directly in the plist
+### 日志位置
+- 主日志：`/var/mobile/Library/Preferences/wxkeyboard.log`
+- 备份日志：`/var/mobile/Library/Preferences/wxkeyboard.log.1`
 
-## Compatibility
+### 查看实时日志
+```bash
+tail -f /var/mobile/Library/Preferences/wxkeyboard.log
+```
 
-- WeType Keyboard (com.tencent.wetype.keyboard)
-- iOS 13+ (tested on iOS 16+)
-- Rootless jailbreaks supported
+### 日志内容
+启用 `DebugLog` 后，日志将包含：
+- 插件启动和配置信息
+- 手势识别器安装状态
+- 每次滑动的详细信息（位置、距离、方向）
+- 语言切换结果
+- 错误和警告信息
 
-## Debugging
+详细的日志分析指南请查看 [LOG_GUIDE.md](LOG_GUIDE.md)。
 
-Enable `DebugLog` to view detailed logs in `/var/mobile/Library/Preferences/wxkeyboard.log`. Logs include:
+## 故障排查
 
-- Gesture attachment and detection
-- Region identification
-- Action triggering
-- Error conditions
+### 滑动没有响应
+1. 确认 `Enabled` 选项为 true
+2. 确认不是在顶部任务栏区域滑动
+3. 尝试增加滑动距离（确保超过 25 像素）
+4. 查看日志文件了解详细信息
 
-## Troubleshooting
+### 切换失败
+1. 确认微信输入法已正确安装
+2. 检查是否添加了中英文输入法
+3. 查看日志中的错误信息
+4. 尝试重启微信输入法进程
 
-### Swipe not working
-- Check that `Enabled` and `GlobalSwipe` are true (or enable `RegionSwipe` with the relevant region toggles if you prefer region-specific actions)
-- Verify the specific region is enabled (e.g., `SpacebarEnabled`) when relying on region routing
-- Adjust `SwipeThreshold` if gestures are too sensitive or too strict
-- Review debug logs for gesture begin/decision/end entries to understand why a swipe was ignored
+### 性能问题
+1. 如果日志文件过大，可以删除重新生成
+2. 调整 `SwipeThreshold` 减少误触发
 
-### Wrong action triggered
-- Disable `GlobalSwipe` if you need region-specific numeric/symbol actions to take precedence
-- Verify region detection in debug logs
-- Adjust region boundaries if needed (geometric heuristics)
-- Check if accessibility labels are available for better accuracy
+## 开发信息
 
-### Performance issues
-- Disable `DebugLog` in production
-- Increase `SwipeThreshold` to reduce false positives
-- Disable unused regions
+### 项目结构
+- `Tweak.xm` - 主要实现代码
+- `control` - 包信息和依赖
+- `Makefile` - 构建配置
+- `.github/workflows/build-deb.yml` - CI/CD 配置
 
-## Development
+### 构建系统
+- 使用 Theos 构建系统
+- GitHub Actions 自动构建和发布
+- 支持 rootless 和传统越狱
 
-The implementation is structured for extensibility:
+### 代码特点
+- 完整的 Objective-C 运行时方法发现
+- 多层回退机制确保兼容性
+- 详细的日志记录和错误处理
+- 模块化设计便于扩展
 
-- `WTKeyboardRegion` enum for easy addition of new regions
-- Modular action methods for each keyboard function
-- Comprehensive API discovery for WeType-specific methods
-- Fallback mechanisms for different WeType versions
+## 技术实现
 
-## License
+### 手势识别
+- 使用 `UIPanGestureRecognizer` 识别垂直滑动
+- 设置为最高优先级（`cancelsTouchesInView=YES`）
+- 自动判断滑动方向和距离
+- 与其他手势和谐共存
 
-This project is provided as-is for educational and personal use.
+### Hook 机制
+- Hook WeType 的主要 view 类
+- 在合适的生命周期方法注入手势识别器
+- 使用 associated objects 管理状态
+- 完整的清理机制避免内存泄漏
+
+### 语言切换策略
+1. 尝试调用 WeType 私有 API
+2. 使用 UIInputViewController 的 inputModes
+3. 回退到轮询模式
+
+## 反馈和支持
+
+### 报告问题
+在提交 Issue 时，请包含：
+1. iOS 版本和越狱类型
+2. 微信输入法版本
+3. 详细的问题描述和重现步骤
+4. 相关的日志内容（最后 100-200 行）
+
+### 贡献代码
+欢迎提交 Pull Request！请确保：
+1. 遵循现有代码风格
+2. 添加适当的日志信息
+3. 更新文档和版本号
+4. 测试多个 iOS 版本
+
+## 版本历史
+
+### v1.0.1 (当前版本)
+- 移除区域特定的键盘切换逻辑
+- 统一为中英文切换
+- 提升手势优先级
+- 增强日志系统
+- 添加详细文档
+
+### v1.0.0
+- 初始版本
+- 基础垂直滑动功能
+- 区域检测和特定操作
+
+详细的变更记录请查看 [CHANGELOG.md](CHANGELOG.md)。
+
+## 许可证
+
+本项目仅供学习和个人使用。
+
+## 致谢
+
+- [Theos](https://theos.dev/) - iOS 越狱开发框架
+- [Randomblock1/theos-action](https://github.com/Randomblock1/theos-action) - GitHub Actions 构建工具
+- WeType 团队 - 优秀的输入法应用

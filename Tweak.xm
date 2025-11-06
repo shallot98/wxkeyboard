@@ -121,11 +121,7 @@ static inline BOOL WTFeatureEnabled(void) {
 }
 
 static inline BOOL WTDebugLogEnabled(void) {
-#ifdef DEBUG
     return WTCurrentConfiguration()->debugLog;
-#else
-    return NO;
-#endif
 }
 
 static NSString *WTCurrentBundleIdentifier(void) {
@@ -266,19 +262,29 @@ static void WTLogLaunchDiagnostics(void) {
     NSString *bundlePath = [NSBundle mainBundle].bundlePath ?: @"";
     NSString *execPath = WTExecutablePath();
     NSString *processName = WTProcessName();
-    WTSLog(@"Launch diagnostics: enabled=%@ debugLog=%@ globalSwipe=%@ regionSwipe=%@ swipeThreshold=%.1f nineKey=%@ numberKey=%@ spacebar=%@ processName=%@ bundleIdentifier=%@ bundlePath=%@ execPath=%@",
-           configuration->enabled ? @"YES" : @"NO",
-           configuration->debugLog ? @"YES" : @"NO",
-           configuration->globalSwipeEnabled ? @"YES" : @"NO",
-           configuration->regionSwipe ? @"YES" : @"NO",
-           configuration->swipeThreshold,
-           configuration->nineKeyEnabled ? @"YES" : @"NO",
-           configuration->numberKeyEnabled ? @"YES" : @"NO",
-           configuration->spacebarEnabled ? @"YES" : @"NO",
-           processName.length > 0 ? processName : @"<unknown>",
-           bundleIdentifier.length > 0 ? bundleIdentifier : @"<none>",
-           bundlePath.length > 0 ? bundlePath : @"<unknown>",
-           execPath.length > 0 ? execPath : @"<unknown>");
+    WTSLog(@"================================================================================");
+    WTSLog(@"WeType Vertical Swipe Toggle v1.0.1 - Launch Diagnostics");
+    WTSLog(@"================================================================================");
+    WTSLog(@"Tweak Configuration:");
+    WTSLog(@"  - Enabled: %@", configuration->enabled ? @"YES" : @"NO");
+    WTSLog(@"  - Debug Logging: %@ (ALWAYS ENABLED in v1.0.1+)", configuration->debugLog ? @"YES" : @"NO");
+    WTSLog(@"  - Global Swipe: %@", configuration->globalSwipeEnabled ? @"YES" : @"NO");
+    WTSLog(@"  - Region Swipe: %@ (IGNORED in v1.0.1 - always CN/EN toggle)", configuration->regionSwipe ? @"YES" : @"NO");
+    WTSLog(@"  - Swipe Threshold: %.1f", configuration->swipeThreshold);
+    WTSLog(@"  - NineKey Enabled: %@ (LEGACY)", configuration->nineKeyEnabled ? @"YES" : @"NO");
+    WTSLog(@"  - NumberKey Enabled: %@ (LEGACY)", configuration->numberKeyEnabled ? @"YES" : @"NO");
+    WTSLog(@"  - Spacebar Enabled: %@ (LEGACY)", configuration->spacebarEnabled ? @"YES" : @"NO");
+    WTSLog(@"Process Information:");
+    WTSLog(@"  - Process Name: %@", processName.length > 0 ? processName : @"<unknown>");
+    WTSLog(@"  - Bundle ID: %@", bundleIdentifier.length > 0 ? bundleIdentifier : @"<none>");
+    WTSLog(@"  - Bundle Path: %@", bundlePath.length > 0 ? bundlePath : @"<unknown>");
+    WTSLog(@"  - Executable: %@", execPath.length > 0 ? execPath : @"<unknown>");
+    WTSLog(@"Behavior Changes in v1.0.1:");
+    WTSLog(@"  - Swipe ANYWHERE (except top taskbar) now switches CN/EN keyboards ONLY");
+    WTSLog(@"  - Gesture has HIGHEST priority (cancelsTouchesInView=YES)");
+    WTSLog(@"  - Region-based actions (number/symbol keyboards) are DISABLED");
+    WTSLog(@"  - Logging enabled in RELEASE builds for better debugging");
+    WTSLog(@"================================================================================");
 }
 
 #ifdef DEBUG
@@ -483,11 +489,11 @@ static BOOL WTSProcessIsWeTypeKeyboard(void) {
         NSString *bundleIdentifier = WTCurrentBundleIdentifier();
         NSString *bundlePath = [NSBundle mainBundle].bundlePath ?: @"";
         if (shouldInstall) {
-            WTSLog(@"Process matched WeType targets; enabling hooks (bundle=%@ bundlePath=%@).",
+            WTSLog(@"[v1.0.1] Process matched WeType targets; enabling hooks (bundle=%@ bundlePath=%@).",
                    bundleIdentifier.length > 0 ? bundleIdentifier : @"<none>",
                    bundlePath.length > 0 ? bundlePath : @"<unknown>");
         } else {
-            WTSLog(@"Process did not match WeType keyboard targets (bundle=%@ bundlePath=%@).",
+            WTSLog(@"[v1.0.1] Process did not match WeType keyboard targets (bundle=%@ bundlePath=%@).",
                    bundleIdentifier.length > 0 ? bundleIdentifier : @"<none>",
                    bundlePath.length > 0 ? bundlePath : @"<unknown>");
         }
@@ -787,7 +793,7 @@ static NSString *WTLanguageSummaryForController(UIInputViewController *controlle
         _panRecognizer = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
         _panRecognizer.maximumNumberOfTouches = 1;
         _panRecognizer.minimumNumberOfTouches = 1;
-        _panRecognizer.cancelsTouchesInView = NO;
+        _panRecognizer.cancelsTouchesInView = YES;
         _panRecognizer.delaysTouchesBegan = NO;
         _panRecognizer.delaysTouchesEnded = NO;
         _panRecognizer.delegate = self;
@@ -795,7 +801,7 @@ static NSString *WTLanguageSummaryForController(UIInputViewController *controlle
         _disabledLimit = 0.0;
         _capturedTranslation = CGPointZero;
         _detectedRegion = WTKeyboardRegionUnknown;
-        WTSLog(@"Gesture recognizer installed on %@", hostView);
+        WTSLog(@"[v1.0.1] Gesture recognizer installed with HIGHEST priority (cancelsTouchesInView=YES) on %@", hostView);
     }
     return self;
 }
@@ -952,7 +958,7 @@ static NSString *WTLanguageSummaryForController(UIInputViewController *controlle
         self.didTrigger = NO;
         self.capturedTranslation = CGPointZero;
         NSString *modeSummary = [self currentModeSummary];
-        WTSLog(@"Pan began at %@ (region=%@, mode=%@)",
+        WTSLog(@"[v1.0.1] Pan began at %@ (detected region=%@ - will be IGNORED, always CN/EN toggle, mode=%@)",
                NSStringFromCGPoint(self.initialLocation),
                WTStringFromKeyboardRegion(self.detectedRegion),
                modeSummary);
@@ -969,34 +975,17 @@ static NSString *WTLanguageSummaryForController(UIInputViewController *controlle
             NSString *beforeMode = WTLanguageSummaryForController(controller);
             BOOL success = NO;
 
-            if (config->globalSwipeEnabled) {
-                success = [[self class] triggerLanguageToggleForHostView:self.hostView];
-            } else if (config->regionSwipe) {
-                switch (self.detectedRegion) {
-                    case WTKeyboardRegionNineKey:
-                        success = [[self class] triggerLanguageToggleForHostView:self.hostView];
-                        break;
-                    case WTKeyboardRegionNumberKey:
-                        success = [[self class] triggerNumericSwitchForHostView:self.hostView];
-                        break;
-                    case WTKeyboardRegionSpacebar:
-                        success = [[self class] triggerSymbolSwitchForHostView:self.hostView];
-                        break;
-                    case WTKeyboardRegionUnknown:
-                    default:
-                        success = [[self class] triggerLanguageToggleForHostView:self.hostView];
-                        break;
-                }
-            } else {
-                success = [[self class] triggerLanguageToggleForHostView:self.hostView];
-            }
+            // Always trigger language toggle (Chinese/English) regardless of region
+            // This ensures swipe anywhere except top taskbar switches CN/EN keyboards
+            success = [[self class] triggerLanguageToggleForHostView:self.hostView];
+            WTSLog(@"[v1.0.1] Force language toggle mode: ignoring region-specific actions");
 
             if (success) {
                 self.didTrigger = YES;
                 self.capturedTranslation = translation;
                 NSString *afterMode = WTLanguageSummaryForController(controller);
                 NSString *direction = translation.y < 0.0 ? @"Up" : @"Down";
-                WTSLog(@"Gesture triggered (%@) dy=%.1f dx=%.1f region=%@ mode=%@ -> %@",
+                WTSLog(@"[v1.0.1] ✓ CN/EN toggle triggered (%@) dy=%.1f dx=%.1f detected_region=%@ (ignored) mode=%@ -> %@",
                        direction,
                        translation.y,
                        translation.x,
@@ -1006,7 +995,7 @@ static NSString *WTLanguageSummaryForController(UIInputViewController *controlle
                 [recognizer setTranslation:CGPointZero inView:self.hostView];
             } else {
                 NSString *direction = translation.y < 0.0 ? @"Up" : @"Down";
-                WTSLog(@"Gesture vertical but action failed (%@) dy=%.1f dx=%.1f region=%@ mode=%@",
+                WTSLog(@"[v1.0.1] ✗ Gesture vertical but CN/EN toggle failed (%@) dy=%.1f dx=%.1f detected_region=%@ (ignored) mode=%@",
                        direction,
                        translation.y,
                        translation.x,
@@ -1026,7 +1015,7 @@ static NSString *WTLanguageSummaryForController(UIInputViewController *controlle
 
         if (recognizer.state == UIGestureRecognizerStateEnded) {
             if (triggered) {
-                WTSLog(@"Pan ended after toggle (direction=%@ dy=%.1f dx=%.1f region=%@ mode=%@)",
+                WTSLog(@"[v1.0.1] Pan ended after CN/EN toggle (direction=%@ dy=%.1f dx=%.1f detected_region=%@ (ignored) mode=%@)",
                        direction,
                        loggedTranslation.y,
                        loggedTranslation.x,
@@ -1035,7 +1024,7 @@ static NSString *WTLanguageSummaryForController(UIInputViewController *controlle
             } else {
                 CGFloat threshold = WTSResolvedSwipeThreshold(config);
                 BOOL vertical = WTSIsApproxVertical(loggedTranslation);
-                WTSLog(@"Pan ended without action (direction=%@ dy=%.1f dx=%.1f threshold=%.1f vertical=%@ region=%@ mode=%@)",
+                WTSLog(@"[v1.0.1] Pan ended without action (direction=%@ dy=%.1f dx=%.1f threshold=%.1f vertical=%@ detected_region=%@ (ignored) mode=%@)",
                        direction,
                        loggedTranslation.y,
                        loggedTranslation.x,
@@ -1046,7 +1035,7 @@ static NSString *WTLanguageSummaryForController(UIInputViewController *controlle
             }
         } else {
             NSString *stateName = recognizer.state == UIGestureRecognizerStateCancelled ? @"cancelled" : @"failed";
-            WTSLog(@"Pan %@ (triggered=%@ direction=%@ dy=%.1f dx=%.1f region=%@ mode=%@)",
+            WTSLog(@"[v1.0.1] Pan %@ (triggered=%@ direction=%@ dy=%.1f dx=%.1f detected_region=%@ (ignored) mode=%@)",
                    stateName,
                    triggered ? @"YES" : @"NO",
                    direction,
@@ -1111,7 +1100,7 @@ static NSString *WTLanguageSummaryForController(UIInputViewController *controlle
     for (NSString *selectorName in controllerSelectors) {
         SEL selector = NSSelectorFromString(selectorName);
         if ([controller respondsToSelector:selector]) {
-            WTSLog(@"Invoking WeType selector %@", selectorName);
+            WTSLog(@"[v1.0.1] Invoking WeType language toggle selector: %@", selectorName);
             if ([selectorName hasSuffix:@":"]) {
                 ((void (*)(id, SEL, id))objc_msgSend)(controller, selector, nil);
             } else {
@@ -1125,7 +1114,7 @@ static NSString *WTLanguageSummaryForController(UIInputViewController *controlle
     if ([controller respondsToSelector:switchButtonSel]) {
         id button = ((id (*)(id, SEL))objc_msgSend)(controller, switchButtonSel);
         if ([button isKindOfClass:[UIControl class]]) {
-            WTSLog(@"Sending UIControl event to language switch button");
+            WTSLog(@"[v1.0.1] Sending UIControl event to language switch button");
             [button sendActionsForControlEvents:UIControlEventTouchUpInside];
             return YES;
         }
@@ -1146,8 +1135,8 @@ static NSString *WTLanguageSummaryForController(UIInputViewController *controlle
             for (NSString *selectorName in managerSelectors) {
                 SEL selector = NSSelectorFromString(selectorName);
                 if ([manager respondsToSelector:selector]) {
-                    WTSLog(@"Invoking manager selector %@", selectorName);
-                    if ([selectorName hasSuffix:@":"]) {
+                    WTSLog(@"[v1.0.1] Invoking language manager selector: %@", selectorName);
+                    if ([selectorName hasSuffix:@:"]) {
                         ((void (*)(id, SEL, id))objc_msgSend)(manager, selector, nil);
                     } else {
                         ((void (*)(id, SEL))objc_msgSend)(manager, selector);
@@ -1228,7 +1217,7 @@ static NSString *WTLanguageSummaryForController(UIInputViewController *controlle
     if ([controller respondsToSelector:setInputModeSel]) {
         ((void (*)(id, SEL, id))objc_msgSend)(controller, setInputModeSel, targetMode);
         WTSUpdateLanguageStateWithMode(targetMode);
-        WTSLog(@"Switched language via setInputMode:");
+        WTSLog(@"[v1.0.1] Switched language via setInputMode:");
         return YES;
     }
 
@@ -1250,7 +1239,7 @@ static NSString *WTLanguageSummaryForController(UIInputViewController *controlle
     if ([controller respondsToSelector:setInputModeSel]) {
         ((void (*)(id, SEL, id))objc_msgSend)(controller, setInputModeSel, targetMode);
         WTSUpdateLanguageStateWithMode(targetMode);
-        WTSLog(@"Fallback toggled language using rotating index %ld", (long)fallbackIndex);
+        WTSLog(@"[v1.0.1] Fallback toggled language using rotating index %ld", (long)fallbackIndex);
         return YES;
     }
     return NO;
@@ -1265,7 +1254,7 @@ static NSString *WTLanguageSummaryForController(UIInputViewController *controlle
         controller = [self inputControllerForResponder:hostView.nextResponder];
     }
     if (!controller) {
-        WTSLog(@"No input controller found for %@", hostView);
+        WTSLog(@"[v1.0.1] No input controller found for %@", hostView);
         return NO;
     }
 
@@ -1541,14 +1530,14 @@ static void WTSInstallSwipeIfNeeded(UIView *view) {
     @autoreleasepool {
         WTLogLaunchDiagnostics();
         if (!WTFeatureEnabled()) {
-            WTSLog(@"wxkeyboard tweak disabled via preferences; skipping initialization.");
+            WTSLog(@"[v1.0.1] wxkeyboard tweak disabled via preferences; skipping initialization.");
             return;
         }
         if (WTSProcessIsWeTypeKeyboard()) {
-            WTSLog(@"Initializing WeType hook group.");
+            WTSLog(@"[v1.0.1] ✓ Initializing WeType hook group with CN/EN-only swipe mode.");
             %init(WTSWeTypeHooks);
         } else {
-            WTSLog(@"Process not matched for WeType hooks; initialization skipped.");
+            WTSLog(@"[v1.0.1] Process not matched for WeType hooks; initialization skipped.");
         }
     }
 }
