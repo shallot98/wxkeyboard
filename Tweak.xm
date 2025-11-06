@@ -110,7 +110,7 @@ static NSString *WTExecutablePath(void) {
     }
 
     NSMutableData *data = [NSMutableData dataWithLength:bufferSize];
-    if (_NSGetExecutablePath(data.mutableBytes, &bufferSize) == 0) {
+    if (_NSGetExecutablePath((char *)data.mutableBytes, &bufferSize) == 0) {
         char *mutablePath = (char *)data.mutableBytes;
         return [[NSFileManager defaultManager] stringWithFileSystemRepresentation:mutablePath length:strlen(mutablePath)];
     }
