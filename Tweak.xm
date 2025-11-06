@@ -280,26 +280,13 @@ static BOOL WTShouldLogLevel(NSString *level) {
     }
     NSString *currentLevel = WTCurrentConfiguration()->logLevel;
     if ([currentLevel isEqualToString:@"DEBUG"]) {
-        return YES; // DEBUG shows everything
+        return YES;
     } else if ([currentLevel isEqualToString:@"INFO"]) {
         return [level isEqualToString:@"INFO"] || [level isEqualToString:@"ERROR"];
     } else if ([currentLevel isEqualToString:@"ERROR"]) {
         return [level isEqualToString:@"ERROR"];
     }
-    return YES; // Default to showing everything
-}
-
-static void WTSLogWithLevel(NSString *level, NSString *format, ...) NS_FORMAT_FUNCTION(2,3);
-static void WTSLogWithLevel(NSString *level, NSString *format, ...) {
-    if (!WTShouldLogLevel(level)) {
-        return;
-    }
-    va_list args;
-    va_start(args, format);
-    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
-    va_end(args);
-    NSString *prefixedMessage = [NSString stringWithFormat:@"[%@] %@", level, message];
-    WTWriteDebugLogLine(prefixedMessage);
+    return YES;
 }
 
 static void WTSLog(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
@@ -324,19 +311,6 @@ static void WTSLogInfo(NSString *format, ...) {
     NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
     NSString *prefixedMessage = [NSString stringWithFormat:@"[INFO] %@", message];
-    WTWriteDebugLogLine(prefixedMessage);
-}
-
-static void WTSLogError(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
-static void WTSLogError(NSString *format, ...) {
-    if (!WTShouldLogLevel(@"ERROR")) {
-        return;
-    }
-    va_list args;
-    va_start(args, format);
-    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
-    va_end(args);
-    NSString *prefixedMessage = [NSString stringWithFormat:@"[ERROR] %@", message];
     WTWriteDebugLogLine(prefixedMessage);
 }
 
