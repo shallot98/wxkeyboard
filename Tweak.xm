@@ -73,26 +73,6 @@ static BOOL WTReadPreferenceBool(NSString *key, BOOL defaultValue) {
     return result;
 }
 
-static CGFloat WTReadPreferenceFloat(NSString *key, CGFloat defaultValue) {
-    CGFloat result = defaultValue;
-    CFPropertyListRef valueRef = CFPreferencesCopyAppValue((__bridge CFStringRef)key, (__bridge CFStringRef)kWTPreferencesDomain);
-    if (valueRef) {
-        id value = CFBridgingRelease(valueRef);
-        if ([value isKindOfClass:[NSNumber class]]) {
-            result = ((NSNumber *)value).floatValue;
-        }
-    } else {
-        NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:kWTPreferencesDomain];
-        if (defaults) {
-            id value = [defaults objectForKey:key];
-            if (value && [value isKindOfClass:[NSNumber class]]) {
-                result = ((NSNumber *)value).floatValue;
-            }
-        }
-    }
-    return result;
-}
-
 static const WTConfiguration *WTCurrentConfiguration(void) {
     static dispatch_once_t onceToken;
     static WTConfiguration configuration;
