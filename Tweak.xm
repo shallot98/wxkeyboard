@@ -534,16 +534,17 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     return nil;
 }
 
-static void WTSInstallSwipeIfNeeded(UIView *view);
+typedef struct {
+    CGPoint startPoint;
+    NSTimeInterval startTime;
+    NSTimeInterval lastTriggerTime;
+    BOOL directionLocked;
+    BOOL verticalSwipeDetected;
+} WTTouchState;
 
-@interface WTVerticalSwipeManager : NSObject <UIGestureRecognizerDelegate>
+@interface WTVerticalSwipeManager : NSObject
 @property (nonatomic, weak) UIView *hostView;
-@property (nonatomic, strong) UIPanGestureRecognizer *panRecognizer;
-@property (nonatomic, assign) CGPoint startPoint;
-@property (nonatomic, assign) NSTimeInterval startTime;
-@property (nonatomic, assign) NSTimeInterval lastTriggerTime;
-@property (nonatomic, assign) BOOL directionLocked;
-@property (nonatomic, assign) BOOL verticalSwipeDetected;
+@property (nonatomic, assign) WTTouchState touchState;
 @end
 
 @implementation WTVerticalSwipeManager
@@ -552,175 +553,10 @@ static void WTSInstallSwipeIfNeeded(UIView *view);
     self = [super init];
     if (self) {
         _hostView = hostView;
-        _lastTriggerTime = 0;
-        _directionLocked = NO;
-        _verticalSwipeDetected = NO;
-        
-        // Set up pan gesture recognizer for better control and slow swipe support
-        _panRecognizer = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
-        _panRecognizer.maximumNumberOfTouches = 1;
-        _panRecognizer.delegate = self;
-        [hostView addGestureRecognizer:_panRecognizer];
-        
-        WTSLogInfo(@"Pan gesture recognizer installed on %@ for vertical swipe detection", hostView);
+        memset(&_touchState, 0, sizeof(WTTouchState));
+        WTSLogInfo(@"Touch state tracker initialized on %@", hostView);
     }
     return self;
-}
-
-- (void)dealloc {
-    if (_panRecognizer) {
-        [_hostView removeGestureRecognizer:_panRecognizer];
-    }
-}
-
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
-    if (!self.hostView) {
-        WTSLog(@"gestureRecognizer:shouldReceiveTouch: NO - hostView is nil");
-        return NO;
-    }
-    
-    // Ensure WeType keyboard is active and visible
-    UIInputViewController *controller = [[self class] inputControllerForResponder:self.hostView];
-    if (!controller) {
-        controller = [[self class] inputControllerForResponder:self.hostView.nextResponder];
-    }
-    if (!controller) {
-        WTSLog(@"gestureRecognizer:shouldReceiveTouch: NO - no input controller found");
-        return NO;
-    }
-    
-    // Additional check: ensure the host view is actually visible and part of the keyboard
-    if (!self.hostView.window || self.hostView.hidden || self.hostView.alpha < 0.1) {
-        WTSLog(@"gestureRecognizer:shouldReceiveTouch: NO - hostView not visible");
-        return NO;
-    }
-    
-    // Get touch location in hostView coordinates
-    CGPoint touchPoint = [touch locationInView:self.hostView];
-    CGFloat hostViewHeight = CGRectGetHeight(self.hostView.bounds);
-    
-    // Exclude top toolbar area (approximately top 20% or first 44 points, whichever is larger)
-    CGFloat toolbarHeight = MAX(hostViewHeight * 0.2, 44.0);
-    if (touchPoint.y < toolbarHeight) {
-        WTSLog(@"gestureRecognizer:shouldReceiveTouch: NO - touch in toolbar area (y=%.1f, toolbarHeight=%.1f)", touchPoint.y, toolbarHeight);
-        return NO;
-    }
-    
-    // Check if touch.view is part of toolbar by class name
-    if (touch.view) {
-        NSString *className = NSStringFromClass(touch.view.class);
-        // Exclude WeType's toolbar views
-        if ([className containsString:@"Toolbar"] || [className containsString:@"ToolBar"] || 
-            [className containsString:@"TopBar"] || [className containsString:@"NavigationBar"]) {
-            WTSLog(@"gestureRecognizer:shouldReceiveTouch: NO - touch on toolbar view: %@", className);
-            return NO;
-        }
-        
-        // Also check the superview hierarchy for toolbar
-        UIView *parentView = touch.view.superview;
-        NSInteger depth = 0;
-        while (parentView && depth < 5) {
-            NSString *parentClassName = NSStringFromClass(parentView.class);
-            if ([parentClassName containsString:@"Toolbar"] || [parentClassName containsString:@"ToolBar"] || 
-                [parentClassName containsString:@"TopBar"] || [parentClassName containsString:@"NavigationBar"]) {
-                WTSLog(@"gestureRecognizer:shouldReceiveTouch: NO - touch view parent is toolbar: %@", parentClassName);
-                return NO;
-            }
-            parentView = parentView.superview;
-            depth++;
-        }
-    }
-    
-    WTSLog(@"gestureRecognizer:shouldReceiveTouch: YES - touch at (%.1f, %.1f) in view %@", 
-           touchPoint.x, touchPoint.y, touch.view ? NSStringFromClass(touch.view.class) : @"<nil>");
-    return YES;
-}
-
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
-    return NO;
-}
-
-- (void)handlePan:(UIPanGestureRecognizer *)recognizer {
-    const WTConfiguration *config = WTCurrentConfiguration();
-    NSTimeInterval currentTime = [[NSDate date] timeIntervalSince1970];
-    CGPoint translation = [recognizer translationInView:self.hostView];
-    CGPoint velocity = [recognizer velocityInView:self.hostView];
-    
-    switch (recognizer.state) {
-        case UIGestureRecognizerStateBegan:
-            self.startPoint = [recognizer locationInView:self.hostView];
-            self.startTime = currentTime;
-            self.directionLocked = NO;
-            self.verticalSwipeDetected = NO;
-            WTSLog(@"Pan gesture began at (%.1f, %.1f)", self.startPoint.x, self.startPoint.y);
-            break;
-            
-        case UIGestureRecognizerStateChanged: {
-            // Direction locking: once vertical direction is determined, ignore horizontal noise
-            if (!self.directionLocked) {
-                CGFloat absTranslationX = fabs(translation.x);
-                CGFloat absTranslationY = fabs(translation.y);
-                
-                // Lock to vertical if vertical movement is significantly larger than horizontal
-                if (absTranslationY > absTranslationX * 1.5 && absTranslationY > 10.0) {
-                    self.directionLocked = YES;
-                    WTSLog(@"Direction locked to vertical (dx=%.1f, dy=%.1f)", translation.x, translation.y);
-                } else if (absTranslationX > absTranslationY * 2.0 && absTranslationX > 15.0) {
-                    // Horizontal movement dominates, cancel gesture
-                    recognizer.state = UIGestureRecognizerStateFailed;
-                    WTSLog(@"Horizontal movement detected, canceling gesture (dx=%.1f, dy=%.1f)", translation.x, translation.y);
-                    return;
-                }
-            }
-            
-            // Check if we've reached the minimum translation threshold
-            if (self.directionLocked && !self.verticalSwipeDetected) {
-                CGFloat absTranslationY = fabs(translation.y);
-                if (absTranslationY >= config->minTranslationY) {
-                    self.verticalSwipeDetected = YES;
-                    
-                    // Debounce: check if enough time has passed since last trigger
-                    if (currentTime - self.lastTriggerTime < 0.25) {
-                        WTSLog(@"Swipe detected but too soon since last trigger (%.3fs), ignoring", currentTime - self.lastTriggerTime);
-                        return;
-                    }
-                    
-                    // Determine swipe direction and trigger action
-                    if (translation.y < 0) {
-                        // Up swipe
-                        WTSLogInfo(@"Up swipe detected: translation=%.1f, velocity=%.1f, distance=%.1f", 
-                                  translation.y, velocity.y, absTranslationY);
-                        [[self class] switchToPreviousModeForHostView:self.hostView];
-                    } else {
-                        // Down swipe  
-                        WTSLogInfo(@"Down swipe detected: translation=%.1f, velocity=%.1f, distance=%.1f", 
-                                  translation.y, velocity.y, absTranslationY);
-                        [[self class] switchToNextModeForHostView:self.hostView];
-                    }
-                    
-                    self.lastTriggerTime = currentTime;
-                    
-                    // If configured to suppress key taps, cancel the gesture
-                    if (config->suppressKeyTapOnSwipe) {
-                        recognizer.state = UIGestureRecognizerStateEnded;
-                        WTSLog(@"Gesture ended due to suppressKeyTapOnSwipe setting");
-                    }
-                }
-            }
-            break;
-        }
-            
-        case UIGestureRecognizerStateEnded:
-        case UIGestureRecognizerStateCancelled:
-            WTSLog(@"Pan gesture ended - final translation: (%.1f, %.1f), velocity: (%.1f, %.1f)", 
-                   translation.x, translation.y, velocity.x, velocity.y);
-            self.directionLocked = NO;
-            self.verticalSwipeDetected = NO;
-            break;
-            
-        default:
-            break;
-    }
 }
 
 + (UIInputViewController *)inputControllerForResponder:(UIResponder *)responder {
@@ -732,22 +568,6 @@ static void WTSInstallSwipeIfNeeded(UIView *view);
         current = current.nextResponder;
     }
     return nil;
-}
-
-+ (void)installSwipeGesturesOnSubviews:(UIView *)view {
-    if (!view) {
-        return;
-    }
-    
-    // Install on the view itself
-    WTSInstallSwipeIfNeeded(view);
-    
-    // Recursively install on all subviews
-    for (UIView *subview in view.subviews) {
-        [self installSwipeGesturesOnSubviews:subview];
-    }
-    
-    WTSLog(@"Recursively installed swipe gestures on view hierarchy starting from %@", view);
 }
 
 + (NSArray *)getWeTypeInputModes:(UIInputViewController *)controller {
@@ -1109,7 +929,7 @@ static void WTSInstallSwipeIfNeeded(UIView *view);
 
 @end
 
-static const void *kWTSwipeHandlerKey = &kWTSwipeHandlerKey;
+static const void *kWTTouchTrackerKey = &kWTTouchTrackerKey;
 
 static BOOL WTSShouldInstallOnView(UIView *view) {
     if (!view) {
@@ -1117,14 +937,14 @@ static BOOL WTSShouldInstallOnView(UIView *view) {
     }
     
     // Skip if already installed
-    if (objc_getAssociatedObject(view, kWTSwipeHandlerKey) != nil) {
+    if (objc_getAssociatedObject(view, kWTTouchTrackerKey) != nil) {
         return NO;
     }
     
     // Check if view is large enough to be worth installing on
     CGSize boundsSize = view.bounds.size;
     if (boundsSize.width < 20.0 || boundsSize.height < 20.0) {
-        return NO; // Skip very small views
+        return NO;
     }
     
     // Check if view is visible
@@ -1146,15 +966,15 @@ static BOOL WTSShouldInstallOnView(UIView *view) {
     return isKeyboardRelated || isLargeEnough;
 }
 
-static void WTSInstallSwipeIfNeeded(UIView *view) {
+static void WTSInstallTouchTrackerIfNeeded(UIView *view) {
     if (!WTSShouldInstallOnView(view)) {
         return;
     }
     
     WTVerticalSwipeManager *manager = [[WTVerticalSwipeManager alloc] initWithHostView:view];
-    objc_setAssociatedObject(view, kWTSwipeHandlerKey, manager, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, kWTTouchTrackerKey, manager, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     
-    WTSLog(@"Installed swipe gesture on view: %@ (%.1fx%.1f)", 
+    WTSLog(@"Installed touch tracker on view: %@ (%.1fx%.1f)", 
            NSStringFromClass(view.class), view.bounds.size.width, view.bounds.size.height);
 }
 
@@ -1168,111 +988,423 @@ static void WTSInstallSwipeIfNeeded(UIView *view) {
 @interface WBKeyView : UIView @end  // Individual key view
 @interface WXKBKeyView : UIView @end  // Alternative key view class
 
+static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches) {
+    if (!view || touches.count == 0) {
+        return;
+    }
+    
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(view, kWTTouchTrackerKey);
+    if (!tracker) {
+        return;
+    }
+    
+    const WTConfiguration *config = WTCurrentConfiguration();
+    UITouch *touch = touches.anyObject;
+    CGPoint currentPoint = [touch locationInView:view];
+    NSTimeInterval currentTime = [[NSDate date] timeIntervalSince1970];
+    
+    CGFloat dy = currentPoint.y - tracker.touchState.startPoint.y;
+    CGFloat dx = currentPoint.x - tracker.touchState.startPoint.x;
+    
+    if (!tracker.touchState.directionLocked) {
+        CGFloat absDx = fabs(dx);
+        CGFloat absDy = fabs(dy);
+        
+        if (absDy > absDx * 1.5 && absDy > 10.0) {
+            tracker.touchState.directionLocked = YES;
+            WTSLog(@"Direction locked to vertical (dx=%.1f, dy=%.1f)", dx, dy);
+        } else if (absDx > absDy * 2.0 && absDx > 15.0) {
+            WTSLog(@"Horizontal movement detected, releasing tracker (dx=%.1f, dy=%.1f)", dx, dy);
+            tracker.touchState.directionLocked = NO;
+            return;
+        }
+    }
+    
+    if (tracker.touchState.directionLocked && !tracker.touchState.verticalSwipeDetected) {
+        CGFloat absDy = fabs(dy);
+        if (absDy >= config->minTranslationY) {
+            tracker.touchState.verticalSwipeDetected = YES;
+            
+            if (currentTime - tracker.touchState.lastTriggerTime < 0.25) {
+                WTSLog(@"Swipe detected but too soon since last trigger (%.3fs), ignoring", 
+                       currentTime - tracker.touchState.lastTriggerTime);
+                return;
+            }
+            
+            if (dy < 0) {
+                WTSLogInfo(@"Up swipe detected: dy=%.1f, distance=%.1f", dy, absDy);
+                [[WTVerticalSwipeManager class] switchToPreviousModeForHostView:view];
+            } else {
+                WTSLogInfo(@"Down swipe detected: dy=%.1f, distance=%.1f", dy, absDy);
+                [[WTVerticalSwipeManager class] switchToNextModeForHostView:view];
+            }
+            
+            tracker.touchState.lastTriggerTime = currentTime;
+        }
+    }
+}
+
 %group WTSWeTypeHooks
 
 %hook WBMainInputView
 - (void)didMoveToWindow {
     %orig;
-    WTSInstallSwipeIfNeeded(self);
+    WTSInstallTouchTrackerIfNeeded(self);
 }
 
 - (void)layoutSubviews {
     %orig;
-    WTSInstallSwipeIfNeeded(self);
+    WTSInstallTouchTrackerIfNeeded(self);
+}
+
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker && touches.count > 0) {
+        UITouch *touch = touches.anyObject;
+        tracker.touchState.startPoint = [touch locationInView:self];
+        tracker.touchState.startTime = [[NSDate date] timeIntervalSince1970];
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+        WTSLog(@"Touch began at (%.1f, %.1f)", tracker.touchState.startPoint.x, tracker.touchState.startPoint.y);
+    }
+    %orig;
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTSProcessTouchMovedForView(self, touches);
+    %orig;
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker) {
+        WTSLog(@"Touch ended, resetting state");
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+    }
+    %orig;
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker) {
+        WTSLog(@"Touch cancelled, resetting state");
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+    }
+    %orig;
 }
 %end
 
 %hook WBKeyboardView
 - (void)didMoveToWindow {
     %orig;
-    WTSInstallSwipeIfNeeded(self);
+    WTSInstallTouchTrackerIfNeeded(self);
 }
 
 - (void)layoutSubviews {
     %orig;
-    WTSInstallSwipeIfNeeded(self);
+    WTSInstallTouchTrackerIfNeeded(self);
+}
+
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker && touches.count > 0) {
+        UITouch *touch = touches.anyObject;
+        tracker.touchState.startPoint = [touch locationInView:self];
+        tracker.touchState.startTime = [[NSDate date] timeIntervalSince1970];
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+        WTSLog(@"Touch began at (%.1f, %.1f)", tracker.touchState.startPoint.x, tracker.touchState.startPoint.y);
+    }
+    %orig;
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTSProcessTouchMovedForView(self, touches);
+    %orig;
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker) {
+        WTSLog(@"Touch ended, resetting state");
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+    }
+    %orig;
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker) {
+        WTSLog(@"Touch cancelled, resetting state");
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+    }
+    %orig;
 }
 %end
 
 %hook WBInputViewController
 - (void)viewDidLoad {
     %orig;
-    WTSInstallSwipeIfNeeded(self.view);
+    WTSInstallTouchTrackerIfNeeded(self.view);
 }
 
 - (void)viewDidLayoutSubviews {
     %orig;
-    WTSInstallSwipeIfNeeded(self.view);
-}
-
-// Also install on subviews when they are added
-- (void)viewWillLayoutSubviews {
-    %orig;
-    // Recursively install on all subviews to ensure comprehensive coverage
-    [WTVerticalSwipeManager installSwipeGesturesOnSubviews:self.view];
+    WTSInstallTouchTrackerIfNeeded(self.view);
 }
 %end
 
 %hook WXKBKeyboardView
 - (void)didMoveToWindow {
     %orig;
-    WTSInstallSwipeIfNeeded(self);
+    WTSInstallTouchTrackerIfNeeded(self);
 }
 
 - (void)layoutSubviews {
     %orig;
-    WTSInstallSwipeIfNeeded(self);
-    [WTVerticalSwipeManager installSwipeGesturesOnSubviews:self];
+    WTSInstallTouchTrackerIfNeeded(self);
+}
+
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker && touches.count > 0) {
+        UITouch *touch = touches.anyObject;
+        tracker.touchState.startPoint = [touch locationInView:self];
+        tracker.touchState.startTime = [[NSDate date] timeIntervalSince1970];
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+        WTSLog(@"Touch began at (%.1f, %.1f)", tracker.touchState.startPoint.x, tracker.touchState.startPoint.y);
+    }
+    %orig;
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTSProcessTouchMovedForView(self, touches);
+    %orig;
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker) {
+        WTSLog(@"Touch ended, resetting state");
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+    }
+    %orig;
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker) {
+        WTSLog(@"Touch cancelled, resetting state");
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+    }
+    %orig;
 }
 %end
 
 %hook WXKBMainKeyboardView
 - (void)didMoveToWindow {
     %orig;
-    WTSInstallSwipeIfNeeded(self);
+    WTSInstallTouchTrackerIfNeeded(self);
 }
 
 - (void)layoutSubviews {
     %orig;
-    WTSInstallSwipeIfNeeded(self);
-    [WTVerticalSwipeManager installSwipeGesturesOnSubviews:self];
+    WTSInstallTouchTrackerIfNeeded(self);
+}
+
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker && touches.count > 0) {
+        UITouch *touch = touches.anyObject;
+        tracker.touchState.startPoint = [touch locationInView:self];
+        tracker.touchState.startTime = [[NSDate date] timeIntervalSince1970];
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+        WTSLog(@"Touch began at (%.1f, %.1f)", tracker.touchState.startPoint.x, tracker.touchState.startPoint.y);
+    }
+    %orig;
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTSProcessTouchMovedForView(self, touches);
+    %orig;
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker) {
+        WTSLog(@"Touch ended, resetting state");
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+    }
+    %orig;
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker) {
+        WTSLog(@"Touch cancelled, resetting state");
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+    }
+    %orig;
 }
 %end
 
 %hook WXKBKeyContainerView
 - (void)didMoveToWindow {
     %orig;
-    WTSInstallSwipeIfNeeded(self);
+    WTSInstallTouchTrackerIfNeeded(self);
 }
 
 - (void)layoutSubviews {
     %orig;
-    WTSInstallSwipeIfNeeded(self);
-    [WTVerticalSwipeManager installSwipeGesturesOnSubviews:self];
+    WTSInstallTouchTrackerIfNeeded(self);
+}
+
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker && touches.count > 0) {
+        UITouch *touch = touches.anyObject;
+        tracker.touchState.startPoint = [touch locationInView:self];
+        tracker.touchState.startTime = [[NSDate date] timeIntervalSince1970];
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+        WTSLog(@"Touch began at (%.1f, %.1f)", tracker.touchState.startPoint.x, tracker.touchState.startPoint.y);
+    }
+    %orig;
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTSProcessTouchMovedForView(self, touches);
+    %orig;
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker) {
+        WTSLog(@"Touch ended, resetting state");
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+    }
+    %orig;
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker) {
+        WTSLog(@"Touch cancelled, resetting state");
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+    }
+    %orig;
 }
 %end
 
 %hook WBKeyView
 - (void)didMoveToWindow {
     %orig;
-    WTSInstallSwipeIfNeeded(self);
+    WTSInstallTouchTrackerIfNeeded(self);
 }
 
 - (void)layoutSubviews {
     %orig;
-    WTSInstallSwipeIfNeeded(self);
+    WTSInstallTouchTrackerIfNeeded(self);
+}
+
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker && touches.count > 0) {
+        UITouch *touch = touches.anyObject;
+        tracker.touchState.startPoint = [touch locationInView:self];
+        tracker.touchState.startTime = [[NSDate date] timeIntervalSince1970];
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+        WTSLog(@"Touch began at (%.1f, %.1f)", tracker.touchState.startPoint.x, tracker.touchState.startPoint.y);
+    }
+    %orig;
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTSProcessTouchMovedForView(self, touches);
+    %orig;
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker) {
+        WTSLog(@"Touch ended, resetting state");
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+    }
+    %orig;
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker) {
+        WTSLog(@"Touch cancelled, resetting state");
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+    }
+    %orig;
 }
 %end
 
 %hook WXKBKeyView
 - (void)didMoveToWindow {
     %orig;
-    WTSInstallSwipeIfNeeded(self);
+    WTSInstallTouchTrackerIfNeeded(self);
 }
 
 - (void)layoutSubviews {
     %orig;
-    WTSInstallSwipeIfNeeded(self);
+    WTSInstallTouchTrackerIfNeeded(self);
+}
+
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker && touches.count > 0) {
+        UITouch *touch = touches.anyObject;
+        tracker.touchState.startPoint = [touch locationInView:self];
+        tracker.touchState.startTime = [[NSDate date] timeIntervalSince1970];
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+        WTSLog(@"Touch began at (%.1f, %.1f)", tracker.touchState.startPoint.x, tracker.touchState.startPoint.y);
+    }
+    %orig;
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTSProcessTouchMovedForView(self, touches);
+    %orig;
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker) {
+        WTSLog(@"Touch ended, resetting state");
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+    }
+    %orig;
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
+    if (tracker) {
+        WTSLog(@"Touch cancelled, resetting state");
+        tracker.touchState.directionLocked = NO;
+        tracker.touchState.verticalSwipeDetected = NO;
+    }
+    %orig;
 }
 %end
 
