@@ -27,13 +27,16 @@
 // Constants for WeType vertical swipe implementation
 
 static NSString *const kWTPreferencesDomain = @"com.yourcompany.wxkeyboard";
-static NSString *const kWTLogFilePath = @"/var/mobile/Library/Preferences/wxkeyboard.log";
-static NSString *const kWTLogFileBackupPath = @"/var/mobile/Library/Preferences/wxkeyboard.log.1";
+static NSString *const kWTLogFilePath = @"/var/mobile/Library/Logs/wxkeyboard.log";
+static NSString *const kWTLogFileBackupPath = @"/var/mobile/Library/Logs/wxkeyboard.log.1";
 static const NSUInteger kWTLogRotateThresholdBytes = 256 * 1024;
 
 typedef struct {
     BOOL enabled;
     BOOL debugLog;
+    CGFloat minTranslationY;
+    BOOL suppressKeyTapOnSwipe;
+    NSString *logLevel;
 } WTConfiguration;
 
 static BOOL WTInterpretBoolFromObject(id value, BOOL defaultValue) {
@@ -51,6 +54,30 @@ static BOOL WTInterpretBoolFromObject(id value, BOOL defaultValue) {
         if ([lower isEqualToString:@"0"] || [lower isEqualToString:@"false"] || [lower isEqualToString:@"no"] || [lower isEqualToString:@"disabled"]) {
             return NO;
         }
+    }
+    return defaultValue;
+}
+
+static CGFloat WTInterpretCGFloatFromObject(id value, CGFloat defaultValue) {
+    if (!value || value == [NSNull null]) {
+        return defaultValue;
+    }
+    if ([value isKindOfClass:[NSNumber class]]) {
+        return ((NSNumber *)value).floatValue;
+    }
+    if ([value isKindOfClass:[NSString class]]) {
+        return [(NSString *)value floatValue];
+    }
+    return defaultValue;
+}
+
+static NSString *WTInterpretStringFromObject(id value, NSString *defaultValue) {
+    if (!value || value == [NSNull null]) {
+        return defaultValue;
+    }
+    if ([value isKindOfClass:[NSString class]]) {
+        NSString *stringValue = (NSString *)value;
+        return stringValue.length > 0 ? stringValue : defaultValue;
     }
     return defaultValue;
 }
@@ -73,12 +100,51 @@ static BOOL WTReadPreferenceBool(NSString *key, BOOL defaultValue) {
     return result;
 }
 
+static CGFloat WTReadPreferenceCGFloat(NSString *key, CGFloat defaultValue) {
+    CGFloat result = defaultValue;
+    CFPropertyListRef valueRef = CFPreferencesCopyAppValue((__bridge CFStringRef)key, (__bridge CFStringRef)kWTPreferencesDomain);
+    if (valueRef) {
+        id value = CFBridgingRelease(valueRef);
+        result = WTInterpretCGFloatFromObject(value, defaultValue);
+    } else {
+        NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:kWTPreferencesDomain];
+        if (defaults) {
+            id value = [defaults objectForKey:key];
+            if (value) {
+                result = WTInterpretCGFloatFromObject(value, defaultValue);
+            }
+        }
+    }
+    return result;
+}
+
+static NSString *WTReadPreferenceString(NSString *key, NSString *defaultValue) {
+    NSString *result = defaultValue;
+    CFPropertyListRef valueRef = CFPreferencesCopyAppValue((__bridge CFStringRef)key, (__bridge CFStringRef)kWTPreferencesDomain);
+    if (valueRef) {
+        id value = CFBridgingRelease(valueRef);
+        result = WTInterpretStringFromObject(value, defaultValue);
+    } else {
+        NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:kWTPreferencesDomain];
+        if (defaults) {
+            id value = [defaults objectForKey:key];
+            if (value) {
+                result = WTInterpretStringFromObject(value, defaultValue);
+            }
+        }
+    }
+    return result;
+}
+
 static const WTConfiguration *WTCurrentConfiguration(void) {
     static dispatch_once_t onceToken;
     static WTConfiguration configuration;
     dispatch_once(&onceToken, ^{
         configuration.enabled = WTReadPreferenceBool(@"Enabled", YES);
         configuration.debugLog = WTReadPreferenceBool(@"DebugLog", YES);
+        configuration.minTranslationY = WTReadPreferenceCGFloat(@"MinTranslationY", 28.0);
+        configuration.suppressKeyTapOnSwipe = WTReadPreferenceBool(@"SuppressKeyTapOnSwipe", YES);
+        configuration.logLevel = WTReadPreferenceString(@"LogLevel", @"DEBUG");
     });
     return &configuration;
 }
@@ -208,9 +274,37 @@ static void WTWriteDebugLogLine(NSString *message) {
     NSLog(@"[wxkeyboard] %@", line);
 }
 
+static BOOL WTShouldLogLevel(NSString *level) {
+    if (!WTDebugLogEnabled()) {
+        return NO;
+    }
+    NSString *currentLevel = WTCurrentConfiguration()->logLevel;
+    if ([currentLevel isEqualToString:@"DEBUG"]) {
+        return YES; // DEBUG shows everything
+    } else if ([currentLevel isEqualToString:@"INFO"]) {
+        return [level isEqualToString:@"INFO"] || [level isEqualToString:@"ERROR"];
+    } else if ([currentLevel isEqualToString:@"ERROR"]) {
+        return [level isEqualToString:@"ERROR"];
+    }
+    return YES; // Default to showing everything
+}
+
+static void WTSLogWithLevel(NSString *level, NSString *format, ...) NS_FORMAT_FUNCTION(2,3);
+static void WTSLogWithLevel(NSString *level, NSString *format, ...) {
+    if (!WTShouldLogLevel(level)) {
+        return;
+    }
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    NSString *prefixedMessage = [NSString stringWithFormat:@"[%@] %@", level, message];
+    WTWriteDebugLogLine(prefixedMessage);
+}
+
 static void WTSLog(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
 static void WTSLog(NSString *format, ...) {
-    if (!WTDebugLogEnabled()) {
+    if (!WTShouldLogLevel(@"DEBUG")) {
         return;
     }
     va_list args;
@@ -218,6 +312,32 @@ static void WTSLog(NSString *format, ...) {
     NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
     WTWriteDebugLogLine(message);
+}
+
+static void WTSLogInfo(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
+static void WTSLogInfo(NSString *format, ...) {
+    if (!WTShouldLogLevel(@"INFO")) {
+        return;
+    }
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    NSString *prefixedMessage = [NSString stringWithFormat:@"[INFO] %@", message];
+    WTWriteDebugLogLine(prefixedMessage);
+}
+
+static void WTSLogError(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
+static void WTSLogError(NSString *format, ...) {
+    if (!WTShouldLogLevel(@"ERROR")) {
+        return;
+    }
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    NSString *prefixedMessage = [NSString stringWithFormat:@"[ERROR] %@", message];
+    WTWriteDebugLogLine(prefixedMessage);
 }
 
 static void WTLogLaunchDiagnostics(void) {
@@ -229,9 +349,12 @@ static void WTLogLaunchDiagnostics(void) {
     NSString *bundlePath = [NSBundle mainBundle].bundlePath ?: @"";
     NSString *execPath = WTExecutablePath();
     NSString *processName = WTProcessName();
-    WTSLog(@"Launch diagnostics: enabled=%@ debugLog=%@ processName=%@ bundleIdentifier=%@ bundlePath=%@ execPath=%@",
+    WTSLogInfo(@"Launch diagnostics: enabled=%@ debugLog=%@ minTranslationY=%.1f suppressKeyTapOnSwipe=%@ logLevel=%@ processName=%@ bundleIdentifier=%@ bundlePath=%@ execPath=%@",
            configuration->enabled ? @"YES" : @"NO",
            configuration->debugLog ? @"YES" : @"NO",
+           configuration->minTranslationY,
+           configuration->suppressKeyTapOnSwipe ? @"YES" : @"NO",
+           configuration->logLevel,
            processName.length > 0 ? processName : @"<unknown>",
            bundleIdentifier.length > 0 ? bundleIdentifier : @"<none>",
            bundlePath.length > 0 ? bundlePath : @"<unknown>",
@@ -439,8 +562,12 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
 
 @interface WTVerticalSwipeManager : NSObject <UIGestureRecognizerDelegate>
 @property (nonatomic, weak) UIView *hostView;
-@property (nonatomic, strong) UISwipeGestureRecognizer *upSwipeRecognizer;
-@property (nonatomic, strong) UISwipeGestureRecognizer *downSwipeRecognizer;
+@property (nonatomic, strong) UIPanGestureRecognizer *panRecognizer;
+@property (nonatomic, assign) CGPoint startPoint;
+@property (nonatomic, assign) NSTimeInterval startTime;
+@property (nonatomic, assign) NSTimeInterval lastTriggerTime;
+@property (nonatomic, assign) BOOL directionLocked;
+@property (nonatomic, assign) BOOL verticalSwipeDetected;
 @end
 
 @implementation WTVerticalSwipeManager
@@ -449,34 +576,24 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     self = [super init];
     if (self) {
         _hostView = hostView;
+        _lastTriggerTime = 0;
+        _directionLocked = NO;
+        _verticalSwipeDetected = NO;
         
-        // Set up up swipe recognizer with high priority to override WeType's built-in gestures
-        _upSwipeRecognizer = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(handleUpSwipe:)];
-        _upSwipeRecognizer.direction = UISwipeGestureRecognizerDirectionUp;
-        _upSwipeRecognizer.numberOfTouchesRequired = 1;
-        _upSwipeRecognizer.cancelsTouchesInView = YES; // Cancel touch events to override button actions
-        _upSwipeRecognizer.delegate = self;
-        [hostView addGestureRecognizer:_upSwipeRecognizer];
+        // Set up pan gesture recognizer for better control and slow swipe support
+        _panRecognizer = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
+        _panRecognizer.maximumNumberOfTouches = 1;
+        _panRecognizer.delegate = self;
+        [hostView addGestureRecognizer:_panRecognizer];
         
-        // Set up down swipe recognizer with high priority to override WeType's built-in gestures
-        _downSwipeRecognizer = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(handleDownSwipe:)];
-        _downSwipeRecognizer.direction = UISwipeGestureRecognizerDirectionDown;
-        _downSwipeRecognizer.numberOfTouchesRequired = 1;
-        _downSwipeRecognizer.cancelsTouchesInView = YES; // Cancel touch events to override button actions
-        _downSwipeRecognizer.delegate = self;
-        [hostView addGestureRecognizer:_downSwipeRecognizer];
-        
-        WTSLog(@"Vertical swipe gesture recognizers installed on %@ with touch cancellation enabled", hostView);
+        WTSLogInfo(@"Pan gesture recognizer installed on %@ for vertical swipe detection", hostView);
     }
     return self;
 }
 
 - (void)dealloc {
-    if (_upSwipeRecognizer) {
-        [_hostView removeGestureRecognizer:_upSwipeRecognizer];
-    }
-    if (_downSwipeRecognizer) {
-        [_hostView removeGestureRecognizer:_downSwipeRecognizer];
+    if (_panRecognizer) {
+        [_hostView removeGestureRecognizer:_panRecognizer];
     }
 }
 
@@ -547,17 +664,86 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     return NO;
 }
 
-- (void)handleUpSwipe:(UISwipeGestureRecognizer *)recognizer {
-    if (recognizer.state == UIGestureRecognizerStateRecognized) {
-        WTSLog(@"Up swipe detected on %@", self.hostView);
-        [[self class] switchToPreviousModeForHostView:self.hostView];
-    }
-}
-
-- (void)handleDownSwipe:(UISwipeGestureRecognizer *)recognizer {
-    if (recognizer.state == UIGestureRecognizerStateRecognized) {
-        WTSLog(@"Down swipe detected on %@", self.hostView);
-        [[self class] switchToNextModeForHostView:self.hostView];
+- (void)handlePan:(UIPanGestureRecognizer *)recognizer {
+    const WTConfiguration *config = WTCurrentConfiguration();
+    NSTimeInterval currentTime = [[NSDate date] timeIntervalSince1970];
+    CGPoint translation = [recognizer translationInView:self.hostView];
+    CGPoint velocity = [recognizer velocityInView:self.hostView];
+    
+    switch (recognizer.state) {
+        case UIGestureRecognizerStateBegan:
+            self.startPoint = [recognizer locationInView:self.hostView];
+            self.startTime = currentTime;
+            self.directionLocked = NO;
+            self.verticalSwipeDetected = NO;
+            WTSLog(@"Pan gesture began at (%.1f, %.1f)", self.startPoint.x, self.startPoint.y);
+            break;
+            
+        case UIGestureRecognizerStateChanged: {
+            // Direction locking: once vertical direction is determined, ignore horizontal noise
+            if (!self.directionLocked) {
+                CGFloat absTranslationX = fabs(translation.x);
+                CGFloat absTranslationY = fabs(translation.y);
+                
+                // Lock to vertical if vertical movement is significantly larger than horizontal
+                if (absTranslationY > absTranslationX * 1.5 && absTranslationY > 10.0) {
+                    self.directionLocked = YES;
+                    WTSLog(@"Direction locked to vertical (dx=%.1f, dy=%.1f)", translation.x, translation.y);
+                } else if (absTranslationX > absTranslationY * 2.0 && absTranslationX > 15.0) {
+                    // Horizontal movement dominates, cancel gesture
+                    recognizer.state = UIGestureRecognizerStateFailed;
+                    WTSLog(@"Horizontal movement detected, canceling gesture (dx=%.1f, dy=%.1f)", translation.x, translation.y);
+                    return;
+                }
+            }
+            
+            // Check if we've reached the minimum translation threshold
+            if (self.directionLocked && !self.verticalSwipeDetected) {
+                CGFloat absTranslationY = fabs(translation.y);
+                if (absTranslationY >= config->minTranslationY) {
+                    self.verticalSwipeDetected = YES;
+                    
+                    // Debounce: check if enough time has passed since last trigger
+                    if (currentTime - self.lastTriggerTime < 0.25) {
+                        WTSLog(@"Swipe detected but too soon since last trigger (%.3fs), ignoring", currentTime - self.lastTriggerTime);
+                        return;
+                    }
+                    
+                    // Determine swipe direction and trigger action
+                    if (translation.y < 0) {
+                        // Up swipe
+                        WTSLogInfo(@"Up swipe detected: translation=%.1f, velocity=%.1f, distance=%.1f", 
+                                  translation.y, velocity.y, absTranslationY);
+                        [[self class] switchToPreviousModeForHostView:self.hostView];
+                    } else {
+                        // Down swipe  
+                        WTSLogInfo(@"Down swipe detected: translation=%.1f, velocity=%.1f, distance=%.1f", 
+                                  translation.y, velocity.y, absTranslationY);
+                        [[self class] switchToNextModeForHostView:self.hostView];
+                    }
+                    
+                    self.lastTriggerTime = currentTime;
+                    
+                    // If configured to suppress key taps, cancel the gesture
+                    if (config->suppressKeyTapOnSwipe) {
+                        recognizer.state = UIGestureRecognizerStateEnded;
+                        WTSLog(@"Gesture ended due to suppressKeyTapOnSwipe setting");
+                    }
+                }
+            }
+            break;
+        }
+            
+        case UIGestureRecognizerStateEnded:
+        case UIGestureRecognizerStateCancelled:
+            WTSLog(@"Pan gesture ended - final translation: (%.1f, %.1f), velocity: (%.1f, %.1f)", 
+                   translation.x, translation.y, velocity.x, velocity.y);
+            self.directionLocked = NO;
+            self.verticalSwipeDetected = NO;
+            break;
+            
+        default:
+            break;
     }
 }
 
@@ -570,6 +756,22 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
         current = current.nextResponder;
     }
     return nil;
+}
+
++ (void)installSwipeGesturesOnSubviews:(UIView *)view {
+    if (!view) {
+        return;
+    }
+    
+    // Install on the view itself
+    WTSInstallSwipeIfNeeded(view);
+    
+    // Recursively install on all subviews
+    for (UIView *subview in view.subviews) {
+        [self installSwipeGesturesOnSubviews:subview];
+    }
+    
+    WTSLog(@"Recursively installed swipe gestures on view hierarchy starting from %@", view);
 }
 
 + (NSArray *)getWeTypeInputModes:(UIInputViewController *)controller {
@@ -933,20 +1135,62 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
 
 static const void *kWTSwipeHandlerKey = &kWTSwipeHandlerKey;
 
-static void WTSInstallSwipeIfNeeded(UIView *view) {
+static BOOL WTSShouldInstallOnView(UIView *view) {
     if (!view) {
-        return;
+        return NO;
     }
+    
+    // Skip if already installed
     if (objc_getAssociatedObject(view, kWTSwipeHandlerKey) != nil) {
-        return;
+        return NO;
     }
-    WTVerticalSwipeManager *manager = [[WTVerticalSwipeManager alloc] initWithHostView:view];
-    objc_setAssociatedObject(view, kWTSwipeHandlerKey, manager, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    
+    // Check if view is large enough to be worth installing on
+    CGSize boundsSize = view.bounds.size;
+    if (boundsSize.width < 20.0 || boundsSize.height < 20.0) {
+        return NO; // Skip very small views
+    }
+    
+    // Check if view is visible
+    if (view.hidden || view.alpha < 0.1) {
+        return NO;
+    }
+    
+    // Prioritize larger views and keyboard-related views
+    NSString *className = NSStringFromClass(view.class);
+    BOOL isKeyboardRelated = [className containsString:@"Keyboard"] || 
+                             [className containsString:@"Key"] ||
+                             [className containsString:@"Input"] ||
+                             [className containsString:@"WB"] ||
+                             [className containsString:@"WXKB"];
+    
+    // Install on keyboard-related views or larger views
+    BOOL isLargeEnough = boundsSize.width > 100.0 && boundsSize.height > 50.0;
+    
+    return isKeyboardRelated || isLargeEnough;
 }
 
+static void WTSInstallSwipeIfNeeded(UIView *view) {
+    if (!WTSShouldInstallOnView(view)) {
+        return;
+    }
+    
+    WTVerticalSwipeManager *manager = [[WTVerticalSwipeManager alloc] initWithHostView:view];
+    objc_setAssociatedObject(view, kWTSwipeHandlerKey, manager, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    
+    WTSLog(@"Installed swipe gesture on view: %@ (%.1fx%.1f)", 
+           NSStringFromClass(view.class), view.bounds.size.width, view.bounds.size.height);
+}
+
+// WeType keyboard view classes to hook for comprehensive gesture coverage
 @interface WBMainInputView : UIView @end
 @interface WBKeyboardView : UIView @end
 @interface WBInputViewController : UIInputViewController @end
+@interface WXKBKeyboardView : UIView @end  // Additional WeType keyboard view
+@interface WXKBMainKeyboardView : UIView @end  // Main keyboard container
+@interface WXKBKeyContainerView : UIView @end  // Key container view
+@interface WBKeyView : UIView @end  // Individual key view
+@interface WXKBKeyView : UIView @end  // Alternative key view class
 
 %group WTSWeTypeHooks
 
@@ -984,6 +1228,76 @@ static void WTSInstallSwipeIfNeeded(UIView *view) {
     %orig;
     WTSInstallSwipeIfNeeded(self.view);
 }
+
+// Also install on subviews when they are added
+- (void)viewWillLayoutSubviews {
+    %orig;
+    // Recursively install on all subviews to ensure comprehensive coverage
+    [WTVerticalSwipeManager installSwipeGesturesOnSubviews:self.view];
+}
+%end
+
+%hook WXKBKeyboardView
+- (void)didMoveToWindow {
+    %orig;
+    WTSInstallSwipeIfNeeded(self);
+}
+
+- (void)layoutSubviews {
+    %orig;
+    WTSInstallSwipeIfNeeded(self);
+    [WTVerticalSwipeManager installSwipeGesturesOnSubviews:self];
+}
+%end
+
+%hook WXKBMainKeyboardView
+- (void)didMoveToWindow {
+    %orig;
+    WTSInstallSwipeIfNeeded(self);
+}
+
+- (void)layoutSubviews {
+    %orig;
+    WTSInstallSwipeIfNeeded(self);
+    [WTVerticalSwipeManager installSwipeGesturesOnSubviews:self];
+}
+%end
+
+%hook WXKBKeyContainerView
+- (void)didMoveToWindow {
+    %orig;
+    WTSInstallSwipeIfNeeded(self);
+}
+
+- (void)layoutSubviews {
+    %orig;
+    WTSInstallSwipeIfNeeded(self);
+    [WTVerticalSwipeManager installSwipeGesturesOnSubviews:self];
+}
+%end
+
+%hook WBKeyView
+- (void)didMoveToWindow {
+    %orig;
+    WTSInstallSwipeIfNeeded(self);
+}
+
+- (void)layoutSubviews {
+    %orig;
+    WTSInstallSwipeIfNeeded(self);
+}
+%end
+
+%hook WXKBKeyView
+- (void)didMoveToWindow {
+    %orig;
+    WTSInstallSwipeIfNeeded(self);
+}
+
+- (void)layoutSubviews {
+    %orig;
+    WTSInstallSwipeIfNeeded(self);
+}
 %end
 
 %hook UIKeyboardImpl
@@ -996,8 +1310,6 @@ static void WTSInstallSwipeIfNeeded(UIView *view) {
     %orig(mode);
     WTMaybeEmitKeyboardImplDiagnostics(self, NSStringFromSelector(_cmd), mode);
 }
-%end
-
 %end
 
 %ctor {
