@@ -1003,31 +1003,35 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     CGPoint currentPoint = [touch locationInView:view];
     NSTimeInterval currentTime = [[NSDate date] timeIntervalSince1970];
     
-    CGFloat dy = currentPoint.y - tracker.touchState.startPoint.y;
-    CGFloat dx = currentPoint.x - tracker.touchState.startPoint.x;
+    WTTouchState state = tracker.touchState;
+    CGFloat dy = currentPoint.y - state.startPoint.y;
+    CGFloat dx = currentPoint.x - state.startPoint.x;
     
-    if (!tracker.touchState.directionLocked) {
+    if (!state.directionLocked) {
         CGFloat absDx = fabs(dx);
         CGFloat absDy = fabs(dy);
         
         if (absDy > absDx * 1.5 && absDy > 10.0) {
-            tracker.touchState.directionLocked = YES;
+            state.directionLocked = YES;
+            tracker.touchState = state;
             WTSLog(@"Direction locked to vertical (dx=%.1f, dy=%.1f)", dx, dy);
         } else if (absDx > absDy * 2.0 && absDx > 15.0) {
             WTSLog(@"Horizontal movement detected, releasing tracker (dx=%.1f, dy=%.1f)", dx, dy);
-            tracker.touchState.directionLocked = NO;
+            state.directionLocked = NO;
+            tracker.touchState = state;
             return;
         }
     }
     
-    if (tracker.touchState.directionLocked && !tracker.touchState.verticalSwipeDetected) {
+    if (state.directionLocked && !state.verticalSwipeDetected) {
         CGFloat absDy = fabs(dy);
         if (absDy >= config->minTranslationY) {
-            tracker.touchState.verticalSwipeDetected = YES;
+            state.verticalSwipeDetected = YES;
             
-            if (currentTime - tracker.touchState.lastTriggerTime < 0.25) {
+            if (currentTime - state.lastTriggerTime < 0.25) {
                 WTSLog(@"Swipe detected but too soon since last trigger (%.3fs), ignoring", 
-                       currentTime - tracker.touchState.lastTriggerTime);
+                       currentTime - state.lastTriggerTime);
+                tracker.touchState = state;
                 return;
             }
             
@@ -1039,7 +1043,8 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
                 [[WTVerticalSwipeManager class] switchToNextModeForHostView:view];
             }
             
-            tracker.touchState.lastTriggerTime = currentTime;
+            state.lastTriggerTime = currentTime;
+            tracker.touchState = state;
         }
     }
 }
@@ -1061,11 +1066,13 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker && touches.count > 0) {
         UITouch *touch = touches.anyObject;
-        tracker.touchState.startPoint = [touch locationInView:self];
-        tracker.touchState.startTime = [[NSDate date] timeIntervalSince1970];
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
-        WTSLog(@"Touch began at (%.1f, %.1f)", tracker.touchState.startPoint.x, tracker.touchState.startPoint.y);
+        WTTouchState state = tracker.touchState;
+        state.startPoint = [touch locationInView:self];
+        state.startTime = [[NSDate date] timeIntervalSince1970];
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
+        WTSLog(@"Touch began at (%.1f, %.1f)", state.startPoint.x, state.startPoint.y);
     }
     %orig;
 }
@@ -1079,8 +1086,10 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker) {
         WTSLog(@"Touch ended, resetting state");
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
+        WTTouchState state = tracker.touchState;
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
     }
     %orig;
 }
@@ -1089,8 +1098,10 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker) {
         WTSLog(@"Touch cancelled, resetting state");
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
+        WTTouchState state = tracker.touchState;
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
     }
     %orig;
 }
@@ -1111,11 +1122,13 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker && touches.count > 0) {
         UITouch *touch = touches.anyObject;
-        tracker.touchState.startPoint = [touch locationInView:self];
-        tracker.touchState.startTime = [[NSDate date] timeIntervalSince1970];
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
-        WTSLog(@"Touch began at (%.1f, %.1f)", tracker.touchState.startPoint.x, tracker.touchState.startPoint.y);
+        WTTouchState state = tracker.touchState;
+        state.startPoint = [touch locationInView:self];
+        state.startTime = [[NSDate date] timeIntervalSince1970];
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
+        WTSLog(@"Touch began at (%.1f, %.1f)", state.startPoint.x, state.startPoint.y);
     }
     %orig;
 }
@@ -1129,8 +1142,10 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker) {
         WTSLog(@"Touch ended, resetting state");
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
+        WTTouchState state = tracker.touchState;
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
     }
     %orig;
 }
@@ -1139,8 +1154,10 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker) {
         WTSLog(@"Touch cancelled, resetting state");
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
+        WTTouchState state = tracker.touchState;
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
     }
     %orig;
 }
@@ -1173,11 +1190,13 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker && touches.count > 0) {
         UITouch *touch = touches.anyObject;
-        tracker.touchState.startPoint = [touch locationInView:self];
-        tracker.touchState.startTime = [[NSDate date] timeIntervalSince1970];
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
-        WTSLog(@"Touch began at (%.1f, %.1f)", tracker.touchState.startPoint.x, tracker.touchState.startPoint.y);
+        WTTouchState state = tracker.touchState;
+        state.startPoint = [touch locationInView:self];
+        state.startTime = [[NSDate date] timeIntervalSince1970];
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
+        WTSLog(@"Touch began at (%.1f, %.1f)", state.startPoint.x, state.startPoint.y);
     }
     %orig;
 }
@@ -1191,8 +1210,10 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker) {
         WTSLog(@"Touch ended, resetting state");
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
+        WTTouchState state = tracker.touchState;
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
     }
     %orig;
 }
@@ -1201,8 +1222,10 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker) {
         WTSLog(@"Touch cancelled, resetting state");
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
+        WTTouchState state = tracker.touchState;
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
     }
     %orig;
 }
@@ -1223,11 +1246,13 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker && touches.count > 0) {
         UITouch *touch = touches.anyObject;
-        tracker.touchState.startPoint = [touch locationInView:self];
-        tracker.touchState.startTime = [[NSDate date] timeIntervalSince1970];
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
-        WTSLog(@"Touch began at (%.1f, %.1f)", tracker.touchState.startPoint.x, tracker.touchState.startPoint.y);
+        WTTouchState state = tracker.touchState;
+        state.startPoint = [touch locationInView:self];
+        state.startTime = [[NSDate date] timeIntervalSince1970];
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
+        WTSLog(@"Touch began at (%.1f, %.1f)", state.startPoint.x, state.startPoint.y);
     }
     %orig;
 }
@@ -1241,8 +1266,10 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker) {
         WTSLog(@"Touch ended, resetting state");
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
+        WTTouchState state = tracker.touchState;
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
     }
     %orig;
 }
@@ -1251,8 +1278,10 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker) {
         WTSLog(@"Touch cancelled, resetting state");
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
+        WTTouchState state = tracker.touchState;
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
     }
     %orig;
 }
@@ -1273,11 +1302,13 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker && touches.count > 0) {
         UITouch *touch = touches.anyObject;
-        tracker.touchState.startPoint = [touch locationInView:self];
-        tracker.touchState.startTime = [[NSDate date] timeIntervalSince1970];
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
-        WTSLog(@"Touch began at (%.1f, %.1f)", tracker.touchState.startPoint.x, tracker.touchState.startPoint.y);
+        WTTouchState state = tracker.touchState;
+        state.startPoint = [touch locationInView:self];
+        state.startTime = [[NSDate date] timeIntervalSince1970];
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
+        WTSLog(@"Touch began at (%.1f, %.1f)", state.startPoint.x, state.startPoint.y);
     }
     %orig;
 }
@@ -1291,8 +1322,10 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker) {
         WTSLog(@"Touch ended, resetting state");
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
+        WTTouchState state = tracker.touchState;
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
     }
     %orig;
 }
@@ -1301,8 +1334,10 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker) {
         WTSLog(@"Touch cancelled, resetting state");
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
+        WTTouchState state = tracker.touchState;
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
     }
     %orig;
 }
@@ -1323,11 +1358,13 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker && touches.count > 0) {
         UITouch *touch = touches.anyObject;
-        tracker.touchState.startPoint = [touch locationInView:self];
-        tracker.touchState.startTime = [[NSDate date] timeIntervalSince1970];
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
-        WTSLog(@"Touch began at (%.1f, %.1f)", tracker.touchState.startPoint.x, tracker.touchState.startPoint.y);
+        WTTouchState state = tracker.touchState;
+        state.startPoint = [touch locationInView:self];
+        state.startTime = [[NSDate date] timeIntervalSince1970];
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
+        WTSLog(@"Touch began at (%.1f, %.1f)", state.startPoint.x, state.startPoint.y);
     }
     %orig;
 }
@@ -1341,8 +1378,10 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker) {
         WTSLog(@"Touch ended, resetting state");
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
+        WTTouchState state = tracker.touchState;
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
     }
     %orig;
 }
@@ -1351,8 +1390,10 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker) {
         WTSLog(@"Touch cancelled, resetting state");
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
+        WTTouchState state = tracker.touchState;
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
     }
     %orig;
 }
@@ -1373,11 +1414,13 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker && touches.count > 0) {
         UITouch *touch = touches.anyObject;
-        tracker.touchState.startPoint = [touch locationInView:self];
-        tracker.touchState.startTime = [[NSDate date] timeIntervalSince1970];
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
-        WTSLog(@"Touch began at (%.1f, %.1f)", tracker.touchState.startPoint.x, tracker.touchState.startPoint.y);
+        WTTouchState state = tracker.touchState;
+        state.startPoint = [touch locationInView:self];
+        state.startTime = [[NSDate date] timeIntervalSince1970];
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
+        WTSLog(@"Touch began at (%.1f, %.1f)", state.startPoint.x, state.startPoint.y);
     }
     %orig;
 }
@@ -1391,8 +1434,10 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker) {
         WTSLog(@"Touch ended, resetting state");
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
+        WTTouchState state = tracker.touchState;
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
     }
     %orig;
 }
@@ -1401,8 +1446,10 @@ static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches)
     WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
     if (tracker) {
         WTSLog(@"Touch cancelled, resetting state");
-        tracker.touchState.directionLocked = NO;
-        tracker.touchState.verticalSwipeDetected = NO;
+        WTTouchState state = tracker.touchState;
+        state.directionLocked = NO;
+        state.verticalSwipeDetected = NO;
+        tracker.touchState = state;
     }
     %orig;
 }
