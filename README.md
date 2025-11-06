@@ -1,15 +1,18 @@
 # WeType Vertical Swipe Mode Switching
 
-This tweak implements full-keyboard vertical swipe gestures for the WeType keyboard, allowing users to cycle through input modes by swiping up or down anywhere on the keyboard.
+This tweak implements full-keyboard vertical swipe gestures for the WeType keyboard, allowing users to cycle through input modes by swiping up or down anywhere on the keyboard with enhanced gesture recognition and comprehensive logging.
 
 ## Features
 
-### Full-Keyboard Vertical Swipe
+### Enhanced Full-Keyboard Vertical Swipe
 
 1. **Swipe up anywhere**: Switch to previous input mode
 2. **Swipe down anywhere**: Switch to next input mode
-3. **WeType-specific integration**: Uses WeType's internal mode manager for proper mode ordering
-4. **Circular navigation**: Wraps around from first to last mode and vice versa
+3. **Slow swipe support**: Works with both fast and slow swipes using distance-based detection
+4. **Direction locking**: Prevents horizontal interference during vertical swipes
+5. **Debounce protection**: Prevents rapid-fire triggering (250ms minimum interval)
+6. **WeType-specific integration**: Uses WeType's internal mode manager for proper mode ordering
+7. **Comprehensive coverage**: Installs on multiple WeType view classes for full keyboard area support
 
 ### Configuration
 
@@ -17,6 +20,9 @@ The tweak supports the following preferences (stored in `com.yourcompany.wxkeybo
 
 - `Enabled` (bool): Master toggle for the entire tweak (default: true)
 - `DebugLog` (bool): Enable debug logging (default: true)
+- `MinTranslationY` (float): Minimum vertical distance for swipe detection (default: 28.0 points)
+- `SuppressKeyTapOnSwipe` (bool): Cancel touch events when swipe is detected (default: true)
+- `LogLevel` (string): Logging level - DEBUG, INFO, or ERROR (default: DEBUG)
 
 ### Example Preferences
 
@@ -24,12 +30,14 @@ See `preferences_example.plist` for a complete example configuration.
 
 ## Implementation Details
 
-### Gesture Recognition
+### Enhanced Gesture Recognition
 
-- Uses two `UISwipeGestureRecognizer` instances (up and down) attached to the top-level keyboard container view
-- `cancelsTouchesInView = NO` to minimize interference with key taps
-- Restricts to vertical direction only to avoid conflicts with horizontal gestures
-- One trigger per swipe gesture
+- Uses `UIPanGestureRecognizer` for precise control and slow swipe support
+- Distance-based triggering (default: 28 points minimum vertical movement)
+- Direction locking to prevent horizontal interference during vertical swipes
+- Debounce protection with 250ms minimum interval between triggers
+- Configurable touch cancellation to prevent key tap interference
+- Comprehensive view hierarchy coverage with recursive installation
 
 ### WeType Integration
 
@@ -61,19 +69,28 @@ The implementation uses WeType-specific APIs for mode management:
 
 ## Debugging
 
-Enable `DebugLog` to view detailed logs in `/var/mobile/Library/Preferences/wxkeyboard.log`. Logs include:
+Enable `DebugLog` to view detailed logs in `/var/mobile/Library/Logs/wxkeyboard.log` (Filza-compatible location). Logs include:
 
-- Gesture attachment and detection
-- Region identification
-- Action triggering
-- Error conditions
+- Gesture attachment and detection with detailed state transitions
+- View hierarchy installation and coverage analysis
+- Distance calculations and direction locking status
+- Mode switching attempts and results
+- Configuration changes and preference updates
+- Error conditions and troubleshooting information
+
+Log levels can be controlled via `LogLevel` preference:
+- `DEBUG`: Shows all detailed information
+- `INFO`: Shows important events and errors
+- `ERROR`: Shows only error conditions
 
 ## Troubleshooting
 
 ### Swipe not working
 - Check that `Enabled` is true
 - Ensure WeType keyboard is active and visible
-- Check debug logs for gesture recognizer installation
+- Check debug logs for gesture recognizer installation and view coverage
+- Verify `MinTranslationY` setting (try lowering to 20.0 for testing)
+- Check if swipe distance meets the minimum threshold
 - Verify that swipe gestures aren't being intercepted by other apps
 
 ### Mode switching not working
@@ -81,25 +98,37 @@ Enable `DebugLog` to view detailed logs in `/var/mobile/Library/Preferences/wxke
 - Verify WeType APIs are accessible (may vary by iOS version)
 - Ensure there are at least 2 input modes available
 - Check for mode switching errors in debug logs
+- Verify mode detection and switching logic in detailed logs
+
+### Slow swipes not detected
+- Check `MinTranslationY` setting - ensure it's not too high
+- Verify direction locking is working (check debug logs)
+- Ensure swipe is primarily vertical (check angle in logs)
+- Try increasing swipe distance gradually
 
 ### Interference with typing
-- The implementation uses `cancelsTouchesInView = NO` to minimize interference
-- If issues persist, check debug logs for gesture conflicts
+- Check `SuppressKeyTapOnSwipe` setting (set to false if too aggressive)
+- Review debug logs for gesture state transitions
 - Ensure swipe gestures are deliberate (not accidental while typing)
+- Check for conflicts with other gesture recognizers
 
 ### Performance issues
+- Set `LogLevel` to INFO or ERROR to reduce logging overhead
 - Disable `DebugLog` in production builds
-- Check for excessive logging in debug mode
+- Check for excessive view installations in debug logs
 
 ## Development
 
-The implementation is structured for WeType-specific integration:
+The implementation is structured for enhanced WeType-specific integration:
 
-- `WTVerticalSwipeManager` handles gesture recognition and mode switching
-- WeType API discovery with multiple fallback selectors
-- Proper previous/next mode calculation with circular navigation
-- Comprehensive logging for debugging mode switching issues
+- `WTVerticalSwipeManager` handles enhanced pan gesture recognition with state machine
+- Distance-based triggering with configurable thresholds and direction locking
+- Comprehensive WeType API discovery with multiple fallback selectors
+- Recursive view hierarchy installation for full keyboard coverage
+- Multi-level logging system (DEBUG/INFO/ERROR) with Filza-compatible output
+- Debounce protection and configurable touch cancellation
 - Clean separation between gesture handling and mode management
+- Intelligent view filtering to avoid performance issues
 
 ## License
 

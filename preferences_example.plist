@@ -7,5 +7,14 @@
     
     <key>DebugLog</key>
     <true/>
+    
+    <key>MinTranslationY</key>
+    <real>28.0</real>
+    
+    <key>SuppressKeyTapOnSwipe</key>
+    <true/>
+    
+    <key>LogLevel</key>
+    <string>DEBUG</string>
 </dict>
 </plist>

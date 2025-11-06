@@ -1,5 +1,40 @@
 # Changelog
 
+## Version 1.2.0
+
+### Major Changes
+- **Enhanced gesture recognition**: Replaced UISwipeGestureRecognizer with UIPanGestureRecognizer for better control and slow swipe support
+- **Distance-based triggering**: Now uses configurable minimum vertical distance (default: 28pt) instead of velocity-based detection
+- **Direction locking**: Implemented intelligent direction locking to prevent horizontal interference during vertical swipes
+- **Debounce protection**: Added 250ms minimum interval between triggers to prevent rapid-fire switching
+- **Comprehensive view coverage**: Extended hook coverage to multiple WeType view classes for full keyboard area support
+- **Filza-compatible logging**: Moved log file to `/var/mobile/Library/Logs/wxkeyboard.log` for easy access via Filza
+
+### New Configuration Options
+- `MinTranslationY` (float): Minimum vertical distance for swipe detection (default: 28.0)
+- `SuppressKeyTapOnSwipe` (bool): Cancel touch events when swipe is detected (default: true)
+- `LogLevel` (string): Logging level - DEBUG, INFO, or ERROR (default: DEBUG)
+
+### Improvements
+- **Slow swipe support**: Now works reliably with slow, deliberate swipes
+- **Recursive installation**: Automatically installs gesture recognizers on view hierarchy for comprehensive coverage
+- **Intelligent view filtering**: Skips very small views to improve performance
+- **Enhanced logging**: Added multi-level logging with detailed state transitions and debugging information
+- **Better conflict resolution**: Improved gesture conflict handling with other system gestures
+
+### Technical Details
+- Pan gesture recognizer with state machine for precise control
+- Configurable thresholds and timing for different user preferences
+- Comprehensive WeType class coverage: WBMainInputView, WBKeyboardView, WXKBKeyboardView, etc.
+- Enhanced error handling and fallback mechanisms
+- Performance optimizations with smart view selection
+
+### Bug Fixes
+- Fixed issue where fast swipes were not recognized reliably
+- Resolved conflicts with horizontal gestures and scrolling
+- Improved reliability of mode switching across different iOS versions
+- Fixed performance issues with excessive gesture recognizer installation
+
 ## Version 1.1.0
 
 ### Major Changes
