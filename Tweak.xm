@@ -560,6 +560,8 @@ static id WTSCurrentInputMode(UIInputViewController *controller) {
     return nil;
 }
 
+static void WTSInstallSwipeIfNeeded(UIView *view);
+
 @interface WTVerticalSwipeManager : NSObject <UIGestureRecognizerDelegate>
 @property (nonatomic, weak) UIView *hostView;
 @property (nonatomic, strong) UIPanGestureRecognizer *panRecognizer;
