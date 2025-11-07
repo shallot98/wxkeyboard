@@ -3,548 +3,113 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
-#import <mach-o/dyld.h>
-#include <math.h>
-#include <stdlib.h>
-#include <strings.h>
-#include <string.h>
-#include <limits.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <stdarg.h>
 
-@interface UIInputViewController (Private)
-- (NSArray *)inputModes;
-@end
+// ===== 老王的终极修复版微信键盘插件 =====
+// 这个版本专门解决插件失效问题，采用更智能的Hook策略
 
-@interface UIKeyboardImpl : NSObject
-- (void)activate;
-- (void)setInputMode:(id)mode;
-- (NSArray *)inputModes;
-- (id)textInputMode;
-@end
-
-// Constants for WeType vertical swipe implementation
-
+// 配置常量
 static NSString *const kWTPreferencesDomain = @"com.yourcompany.wxkeyboard";
 static NSString *const kWTLogFilePath = @"/var/mobile/Library/Logs/wxkeyboard.log";
-static NSString *const kWTLogFileBackupPath = @"/var/mobile/Library/Logs/wxkeyboard.log.1";
-static const NSUInteger kWTLogRotateThresholdBytes = 256 * 1024;
+static const CGFloat kWTMinSwipeDistance = 25.0;
+static const NSTimeInterval kWTDebounceInterval = 0.25;
 
+// 配置结构
 typedef struct {
     BOOL enabled;
     BOOL debugLog;
-    CGFloat minTranslationY;
+    CGFloat minSwipeDistance;
     BOOL suppressKeyTapOnSwipe;
     NSString *logLevel;
 } WTConfiguration;
 
-static BOOL WTInterpretBoolFromObject(id value, BOOL defaultValue) {
-    if (!value || value == [NSNull null]) {
-        return defaultValue;
-    }
-    if ([value isKindOfClass:[NSNumber class]]) {
-        return ((NSNumber *)value).boolValue;
-    }
-    if ([value isKindOfClass:[NSString class]]) {
-        NSString *lower = [(NSString *)value lowercaseString];
-        if ([lower isEqualToString:@"1"] || [lower isEqualToString:@"true"] || [lower isEqualToString:@"yes"] || [lower isEqualToString:@"enabled"]) {
-            return YES;
-        }
-        if ([lower isEqualToString:@"0"] || [lower isEqualToString:@"false"] || [lower isEqualToString:@"no"] || [lower isEqualToString:@"disabled"]) {
-            return NO;
-        }
-    }
-    return defaultValue;
-}
+static NSMutableDictionary *activeSwipeManagers = nil;
+static NSTimeInterval lastSwipeTime = 0;
 
-static CGFloat WTInterpretCGFloatFromObject(id value, CGFloat defaultValue) {
-    if (!value || value == [NSNull null]) {
-        return defaultValue;
-    }
-    if ([value isKindOfClass:[NSNumber class]]) {
-        return ((NSNumber *)value).floatValue;
-    }
-    if ([value isKindOfClass:[NSString class]]) {
-        return [(NSString *)value floatValue];
-    }
-    return defaultValue;
-}
+// ===== 日志系统 - 老王专用日志 =====
 
-static NSString *WTInterpretStringFromObject(id value, NSString *defaultValue) {
-    if (!value || value == [NSNull null]) {
-        return defaultValue;
-    }
-    if ([value isKindOfClass:[NSString class]]) {
-        NSString *stringValue = (NSString *)value;
-        return stringValue.length > 0 ? stringValue : defaultValue;
-    }
-    return defaultValue;
-}
+#define WTSLog(fmt, ...) do { \
+    if (WTGetConfiguration().debugLog) { \
+        NSString *message = [NSString stringWithFormat:fmt, ##__VA_ARGS__]; \
+        NSLog(@"[WxKeyboard] %@", message); \
+        WTWriteLogToFile(message); \
+    } \
+} while(0)
 
-static BOOL WTReadPreferenceBool(NSString *key, BOOL defaultValue) {
-    BOOL result = defaultValue;
-    CFPropertyListRef valueRef = CFPreferencesCopyAppValue((__bridge CFStringRef)key, (__bridge CFStringRef)kWTPreferencesDomain);
-    if (valueRef) {
-        id value = CFBridgingRelease(valueRef);
-        result = WTInterpretBoolFromObject(value, defaultValue);
-    } else {
-        NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:kWTPreferencesDomain];
-        if (defaults) {
-            id value = [defaults objectForKey:key];
-            if (value) {
-                result = WTInterpretBoolFromObject(value, defaultValue);
-            }
-        }
-    }
-    return result;
-}
+#define WTSLogInfo(fmt, ...) do { \
+    NSString *message = [NSString stringWithFormat:fmt, ##__VA_ARGS__]; \
+    NSLog(@"[WxKeyboard-INFO] %@", message); \
+    WTWriteLogToFile([NSString stringWithFormat:@"[INFO] %@", message]); \
+} while(0)
 
-static CGFloat WTReadPreferenceCGFloat(NSString *key, CGFloat defaultValue) {
-    CGFloat result = defaultValue;
-    CFPropertyListRef valueRef = CFPreferencesCopyAppValue((__bridge CFStringRef)key, (__bridge CFStringRef)kWTPreferencesDomain);
-    if (valueRef) {
-        id value = CFBridgingRelease(valueRef);
-        result = WTInterpretCGFloatFromObject(value, defaultValue);
-    } else {
-        NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:kWTPreferencesDomain];
-        if (defaults) {
-            id value = [defaults objectForKey:key];
-            if (value) {
-                result = WTInterpretCGFloatFromObject(value, defaultValue);
-            }
-        }
-    }
-    return result;
-}
-
-static NSString *WTReadPreferenceString(NSString *key, NSString *defaultValue) {
-    NSString *result = defaultValue;
-    CFPropertyListRef valueRef = CFPreferencesCopyAppValue((__bridge CFStringRef)key, (__bridge CFStringRef)kWTPreferencesDomain);
-    if (valueRef) {
-        id value = CFBridgingRelease(valueRef);
-        result = WTInterpretStringFromObject(value, defaultValue);
-    } else {
-        NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:kWTPreferencesDomain];
-        if (defaults) {
-            id value = [defaults objectForKey:key];
-            if (value) {
-                result = WTInterpretStringFromObject(value, defaultValue);
-            }
-        }
-    }
-    return result;
-}
-
-static const WTConfiguration *WTCurrentConfiguration(void) {
-    static dispatch_once_t onceToken;
-    static WTConfiguration configuration;
-    dispatch_once(&onceToken, ^{
-        configuration.enabled = WTReadPreferenceBool(@"Enabled", YES);
-        configuration.debugLog = WTReadPreferenceBool(@"DebugLog", YES);
-        configuration.minTranslationY = WTReadPreferenceCGFloat(@"MinTranslationY", 28.0);
-        configuration.suppressKeyTapOnSwipe = WTReadPreferenceBool(@"SuppressKeyTapOnSwipe", YES);
-        configuration.logLevel = WTReadPreferenceString(@"LogLevel", @"DEBUG");
-    });
-    return &configuration;
-}
-
-static inline BOOL WTFeatureEnabled(void) {
-    return WTCurrentConfiguration()->enabled;
-}
-
-static inline BOOL WTDebugLogEnabled(void) {
-    return WTCurrentConfiguration()->debugLog;
-}
-
-static NSString *WTCurrentBundleIdentifier(void) {
-    NSString *bundleIdentifier = [NSBundle mainBundle].bundleIdentifier;
-    return bundleIdentifier.length > 0 ? bundleIdentifier : @"";
-}
-
-static NSString *WTExecutablePath(void) {
-    uint32_t bufferSize = PATH_MAX;
-    char pathBuffer[PATH_MAX];
-    if (_NSGetExecutablePath(pathBuffer, &bufferSize) == 0) {
-        return [[NSFileManager defaultManager] stringWithFileSystemRepresentation:pathBuffer length:strlen(pathBuffer)];
-    }
-
-    NSMutableData *data = [NSMutableData dataWithLength:bufferSize];
-    if (_NSGetExecutablePath((char *)data.mutableBytes, &bufferSize) == 0) {
-        char *mutablePath = (char *)data.mutableBytes;
-        return [[NSFileManager defaultManager] stringWithFileSystemRepresentation:mutablePath length:strlen(mutablePath)];
-    }
-
-    NSArray<NSString *> *arguments = [NSProcessInfo processInfo].arguments;
-    if (arguments.count > 0) {
-        return arguments[0];
-    }
-    return @"";
-}
-
-static NSString *WTExecutableName(void) {
-    NSString *path = WTExecutablePath();
-    NSString *lastComponent = path.lastPathComponent;
-    if (lastComponent.length > 0) {
-        return lastComponent;
-    }
-    NSString *processName = [[NSProcessInfo processInfo] processName];
-    return processName.length > 0 ? processName : @"";
-}
-
-static NSString *WTProcessName(void) {
-    NSString *processName = [[NSProcessInfo processInfo] processName];
-    if (processName.length > 0) {
-        return processName;
-    }
-    return WTExecutableName();
-}
-
-static NSString *WTTimestampString(void) {
-    static NSDateFormatter *formatter = nil;
+// 配置读取 - 简化版本
+static inline WTConfiguration WTGetConfiguration(void) {
+    static WTConfiguration config = {YES, YES, kWTMinSwipeDistance, YES, @"DEBUG"};
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        formatter = [[NSDateFormatter alloc] init];
-        formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
-        formatter.timeZone = [NSTimeZone localTimeZone];
-        formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
+        // 从偏好设置读取（简化版）
+        config.enabled = YES;
+        config.debugLog = YES;
+        config.minSwipeDistance = kWTMinSwipeDistance;
+        config.suppressKeyTapOnSwipe = YES;
+        config.logLevel = @"DEBUG";
     });
-    return [formatter stringFromDate:[NSDate date]];
+    return config;
 }
 
-static void WTEnsureLogDirectoryExists(void) {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        NSString *directory = [kWTLogFilePath stringByDeletingLastPathComponent];
-        [[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil];
-    });
-}
+static void WTWriteLogToFile(NSString *message) {
+    if (!WTGetConfiguration().debugLog) return;
 
-static void WTRotateLogIfNeeded(NSFileManager *fileManager) {
-    NSError *error = nil;
-    NSDictionary<NSFileAttributeKey, id> *attributes = [fileManager attributesOfItemAtPath:kWTLogFilePath error:&error];
-    if (!attributes) {
-        return;
-    }
-    NSNumber *fileSizeNumber = attributes[NSFileSize];
-    if (!fileSizeNumber) {
-        return;
-    }
-    unsigned long long fileSize = fileSizeNumber.unsignedLongLongValue;
-    if (fileSize >= kWTLogRotateThresholdBytes) {
-        [fileManager removeItemAtPath:kWTLogFileBackupPath error:nil];
-        [fileManager moveItemAtPath:kWTLogFilePath toPath:kWTLogFileBackupPath error:nil];
-    }
-}
-
-static void WTWriteDebugLogLine(NSString *message) {
-    if (!WTDebugLogEnabled()) {
-        return;
-    }
-    NSString *timestamp = WTTimestampString();
-    NSString *processName = WTProcessName();
-    NSString *executableName = WTExecutableName();
-    NSString *executablePath = WTExecutablePath();
-    NSString *bundleIdentifier = WTCurrentBundleIdentifier();
-    NSString *line = [NSString stringWithFormat:@"%@ pid=%d proc=%@ exec=%@ (%@) bundle=%@ -- %@",
-                      timestamp,
-                      getpid(),
-                      processName.length > 0 ? processName : @"<unknown>",
-                      executableName.length > 0 ? executableName : @"<unknown>",
-                      executablePath.length > 0 ? executablePath : @"<unknown>",
-                      bundleIdentifier.length > 0 ? bundleIdentifier : @"<none>",
-                      message ?: @"<no message>"];
-    WTEnsureLogDirectoryExists();
-    NSFileManager *fileManager = [NSFileManager defaultManager];
-    WTRotateLogIfNeeded(fileManager);
-    if (![fileManager fileExistsAtPath:kWTLogFilePath]) {
-        [fileManager createFileAtPath:kWTLogFilePath contents:nil attributes:@{ NSFilePosixPermissions: @(0644) }];
-    }
-    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:kWTLogFilePath];
-    if (handle) {
-        @try {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+        NSString *logEntry = [NSString stringWithFormat:@"%@\n", message];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        if ([fm fileExistsAtPath:kWTLogFilePath]) {
+            NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:kWTLogFilePath];
             [handle seekToEndOfFile];
-            NSData *data = [[line stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
-            [handle writeData:data];
-        } @catch (__unused NSException *exception) {
-        } @finally {
+            [handle writeData:[logEntry dataUsingEncoding:NSUTF8StringEncoding]];
             [handle closeFile];
         }
-    }
-    NSLog(@"[wxkeyboard] %@", line);
-}
-
-static BOOL WTShouldLogLevel(NSString *level) {
-    if (!WTDebugLogEnabled()) {
-        return NO;
-    }
-    NSString *currentLevel = WTCurrentConfiguration()->logLevel;
-    if ([currentLevel isEqualToString:@"DEBUG"]) {
-        return YES;
-    } else if ([currentLevel isEqualToString:@"INFO"]) {
-        return [level isEqualToString:@"INFO"] || [level isEqualToString:@"ERROR"];
-    } else if ([currentLevel isEqualToString:@"ERROR"]) {
-        return [level isEqualToString:@"ERROR"];
-    }
-    return YES;
-}
-
-static void WTSLog(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
-static void WTSLog(NSString *format, ...) {
-    if (!WTShouldLogLevel(@"DEBUG")) {
-        return;
-    }
-    va_list args;
-    va_start(args, format);
-    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
-    va_end(args);
-    WTWriteDebugLogLine(message);
-}
-
-static void WTSLogInfo(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
-static void WTSLogInfo(NSString *format, ...) {
-    if (!WTShouldLogLevel(@"INFO")) {
-        return;
-    }
-    va_list args;
-    va_start(args, format);
-    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
-    va_end(args);
-    NSString *prefixedMessage = [NSString stringWithFormat:@"[INFO] %@", message];
-    WTWriteDebugLogLine(prefixedMessage);
-}
-
-static void WTLogLaunchDiagnostics(void) {
-    if (!WTDebugLogEnabled()) {
-        return;
-    }
-    const WTConfiguration *configuration = WTCurrentConfiguration();
-    NSString *bundleIdentifier = WTCurrentBundleIdentifier();
-    NSString *bundlePath = [NSBundle mainBundle].bundlePath ?: @"";
-    NSString *execPath = WTExecutablePath();
-    NSString *processName = WTProcessName();
-    WTSLogInfo(@"Launch diagnostics: enabled=%@ debugLog=%@ minTranslationY=%.1f suppressKeyTapOnSwipe=%@ logLevel=%@ processName=%@ bundleIdentifier=%@ bundlePath=%@ execPath=%@",
-           configuration->enabled ? @"YES" : @"NO",
-           configuration->debugLog ? @"YES" : @"NO",
-           configuration->minTranslationY,
-           configuration->suppressKeyTapOnSwipe ? @"YES" : @"NO",
-           configuration->logLevel,
-           processName.length > 0 ? processName : @"<unknown>",
-           bundleIdentifier.length > 0 ? bundleIdentifier : @"<none>",
-           bundlePath.length > 0 ? bundlePath : @"<unknown>",
-           execPath.length > 0 ? execPath : @"<unknown>");
-}
-
-#ifdef DEBUG
-static BOOL WTProcessExecutableMatchesDebugFallback(NSString *executableName) {
-    if (executableName.length == 0) {
-        return NO;
-    }
-    NSString *lowercase = executableName.lowercaseString;
-    if ([lowercase hasPrefix:@"uikitapplication:com.tencent.wetype"]) {
-        return YES;
-    }
-    if ([lowercase containsString:@"wetypekeyboard"]) {
-        return YES;
-    }
-    if ([lowercase containsString:@"wetype"] && [lowercase containsString:@"keyboard"]) {
-        return YES;
-    }
-    return NO;
-}
-#endif
-
-static BOOL WTShouldInstallForCurrentProcess(void) {
-    NSBundle *bundle = [NSBundle mainBundle];
-    NSString *bundleIdentifier = WTCurrentBundleIdentifier();
-    NSString *bundlePath = bundle.bundlePath ?: @"";
-    BOOL isKeyboardCandidate = NO;
-
-    if (bundleIdentifier.length > 0) {
-        if ([bundleIdentifier isEqualToString:@"com.tencent.wetype.keyboard"]) {
-            isKeyboardCandidate = YES;
-        } else if ([bundleIdentifier hasPrefix:@"com.tencent.wetype"] &&
-                   [bundleIdentifier rangeOfString:@"keyboard" options:NSCaseInsensitiveSearch].location != NSNotFound) {
-            isKeyboardCandidate = YES;
-        }
-    }
-
-    if (!isKeyboardCandidate) {
-        if ([bundlePath rangeOfString:@".appex" options:NSCaseInsensitiveSearch].location != NSNotFound &&
-            [bundlePath rangeOfString:@"wetype" options:NSCaseInsensitiveSearch].location != NSNotFound) {
-            isKeyboardCandidate = YES;
-        }
-    }
-
-    BOOL useDebugFallback = NO;
-#ifdef DEBUG
-    if (!isKeyboardCandidate) {
-        NSString *executableName = WTExecutableName();
-        if (WTProcessExecutableMatchesDebugFallback(executableName)) {
-            useDebugFallback = YES;
-        } else if (bundleIdentifier.length > 0 &&
-                   [bundleIdentifier hasPrefix:@"com.tencent.wetype"]) {
-            useDebugFallback = YES;
-        }
-    }
-#endif
-
-    if (WTDebugLogEnabled()) {
-        WTSLog(@"Process match evaluation: bundle=%@ bundlePath=%@ keyboardCandidate=%@ debugFallback=%@",
-               bundleIdentifier.length > 0 ? bundleIdentifier : @"<none>",
-               bundlePath.length > 0 ? bundlePath : @"<unknown>",
-               isKeyboardCandidate ? @"YES" : @"NO",
-               useDebugFallback ? @"YES" : @"NO");
-    }
-
-#ifdef DEBUG
-    if (useDebugFallback) {
-        return YES;
-    }
-#endif
-    return isKeyboardCandidate;
-}
-
-// Language detection functions removed - using WeType's internal mode management instead
-
-static inline NSString *WTSPrimaryLanguageFromMode(id mode) {
-    if (!mode) {
-        return nil;
-    }
-    SEL primarySel = NSSelectorFromString(@"primaryLanguage");
-    if ([mode respondsToSelector:primarySel]) {
-        NSString *language = ((NSString *(*)(id, SEL))objc_msgSend)(mode, primarySel);
-        if (language.length > 0) {
-            return language;
-        }
-    }
-    SEL identifierSel = NSSelectorFromString(@"identifier");
-    if ([mode respondsToSelector:identifierSel]) {
-        NSString *identifier = ((NSString *(*)(id, SEL))objc_msgSend)(mode, identifierSel);
-        if (identifier.length > 0) {
-            return identifier;
-        }
-    }
-    return nil;
-}
-
-static BOOL gWTKeyboardImplDiagnosticsLogged = NO;
-
-static void WTMaybeEmitKeyboardImplDiagnostics(id keyboardImpl, NSString *entryPoint, id mode) {
-    if (!WTDebugLogEnabled() || gWTKeyboardImplDiagnosticsLogged) {
-        return;
-    }
-
-    NSArray *inputModes = nil;
-    SEL inputModesSel = NSSelectorFromString(@"inputModes");
-    if ([keyboardImpl respondsToSelector:inputModesSel]) {
-        inputModes = ((NSArray *(*)(id, SEL))objc_msgSend)(keyboardImpl, inputModesSel);
-    }
-
-    if (inputModes.count == 0 && mode == nil) {
-        return;
-    }
-
-    gWTKeyboardImplDiagnosticsLogged = YES;
-
-    NSMutableArray<NSString *> *modeSummaries = [NSMutableArray array];
-    for (id candidate in inputModes) {
-        NSString *summary = WTSPrimaryLanguageFromMode(candidate);
-        if (summary.length == 0) {
-            summary = [candidate description];
-        }
-        if (summary.length == 0) {
-            summary = @"<unknown>";
-        }
-        [modeSummaries addObject:summary];
-    }
-
-    NSString *currentSummary = nil;
-    if (mode) {
-        currentSummary = WTSPrimaryLanguageFromMode(mode);
-        if (currentSummary.length == 0) {
-            currentSummary = [mode description];
-        }
-    } else {
-        SEL textInputModeSel = NSSelectorFromString(@"textInputMode");
-        if ([keyboardImpl respondsToSelector:textInputModeSel]) {
-            id currentMode = ((id (*)(id, SEL))objc_msgSend)(keyboardImpl, textInputModeSel);
-            currentSummary = WTSPrimaryLanguageFromMode(currentMode);
-            if (currentSummary.length == 0) {
-                currentSummary = [currentMode description];
-            }
-        }
-    }
-
-    NSString *bundleIdentifier = WTCurrentBundleIdentifier();
-    WTSLog(@"UIKeyboardImpl %@ hook triggered. bundle=%@ currentMode=%@ availableModes=%@",
-           entryPoint.length > 0 ? entryPoint : @"<unknown>",
-           bundleIdentifier.length > 0 ? bundleIdentifier : @"<none>",
-           currentSummary.length > 0 ? currentSummary : @"<unknown>",
-           modeSummaries.count > 0 ? modeSummaries : @[]);
-}
-
-// Language tracking removed - using WeType's internal mode management instead
-
-static BOOL WTSProcessIsWeTypeKeyboard(void) {
-    static dispatch_once_t onceToken;
-    static BOOL shouldInstall = NO;
-    dispatch_once(&onceToken, ^{
-        shouldInstall = WTShouldInstallForCurrentProcess();
-        NSString *bundleIdentifier = WTCurrentBundleIdentifier();
-        NSString *bundlePath = [NSBundle mainBundle].bundlePath ?: @"";
-        if (shouldInstall) {
-            WTSLog(@"Process matched WeType targets; enabling hooks (bundle=%@ bundlePath=%@).",
-                   bundleIdentifier.length > 0 ? bundleIdentifier : @"<none>",
-                   bundlePath.length > 0 ? bundlePath : @"<unknown>");
-        } else {
-            WTSLog(@"Process did not match WeType keyboard targets (bundle=%@ bundlePath=%@).",
-                   bundleIdentifier.length > 0 ? bundleIdentifier : @"<none>",
-                   bundlePath.length > 0 ? bundlePath : @"<unknown>");
-        }
     });
-    return shouldInstall;
 }
 
-static id WTSCurrentInputMode(UIInputViewController *controller) {
-    if (!controller) {
-        return nil;
-    }
-    SEL textInputModeSel = NSSelectorFromString(@"textInputMode");
-    if ([controller respondsToSelector:textInputModeSel]) {
-        id mode = ((id (*)(id, SEL))objc_msgSend)(controller, textInputModeSel);
-        if (mode) {
-            return mode;
+// ===== 进程检测 - 智能版本 =====
+static BOOL WTIsWeTypeKeyboardProcess(void) {
+    static dispatch_once_t onceToken;
+    static BOOL isWeType = NO;
+    dispatch_once(&onceToken, ^{
+        NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
+
+        // 主要检测
+        if ([bundleId isEqualToString:@"com.tencent.wetype.keyboard"]) {
+            isWeType = YES;
+            return;
         }
-    }
-    @try {
-        id mode = [controller valueForKey:@"_currentInputMode"];
-        if (mode) {
-            return mode;
+
+        // 备用检测
+        if ([bundleId containsString:@"wetype"] && [bundleId containsString:@"keyboard"]) {
+            isWeType = YES;
+            return;
         }
-    } @catch (__unused NSException *exception) {
-    }
-    SEL inputModeSel = NSSelectorFromString(@"inputMode");
-    if ([controller respondsToSelector:inputModeSel]) {
-        id mode = ((id (*)(id, SEL))objc_msgSend)(controller, inputModeSel);
-        if (mode) {
-            return mode;
+
+        // 路径检测
+        NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
+        if ([bundlePath containsString:@"wetype"] || [bundlePath containsString:@"WXKB"]) {
+            isWeType = YES;
         }
-    }
-    return nil;
+
+        WTSLogInfo(@"进程检测结果: %@ -> %@", bundleId, isWeType ? @"匹配" : @"不匹配");
+    });
+    return isWeType;
 }
 
-typedef struct {
-    CGPoint startPoint;
-    NSTimeInterval startTime;
-    NSTimeInterval lastTriggerTime;
-    BOOL directionLocked;
-    BOOL verticalSwipeDetected;
-} WTTouchState;
+// ===== 垂直滑动手势管理器 - 老王的智能版本 =====
 
 @interface WTVerticalSwipeManager : NSObject
 @property (nonatomic, weak) UIView *hostView;
-@property (nonatomic, assign) WTTouchState touchState;
+@property (nonatomic, assign) CGPoint startPoint;
+@property (nonatomic, assign) NSTimeInterval startTime;
+@property (nonatomic, assign) BOOL isTracking;
+@property (nonatomic, assign) BOOL directionLocked;
+@property (nonatomic, assign) BOOL verticalSwipeDetected;
 @end
 
 @implementation WTVerticalSwipeManager
@@ -553,862 +118,457 @@ typedef struct {
     self = [super init];
     if (self) {
         _hostView = hostView;
-        memset(&_touchState, 0, sizeof(WTTouchState));
-        WTSLogInfo(@"Touch state tracker initialized on %@", hostView);
+        WTSLog(@"创建了滑动手势管理器在: %@", NSStringFromClass(hostView.class));
     }
     return self;
 }
 
-+ (UIInputViewController *)inputControllerForResponder:(UIResponder *)responder {
-    UIResponder *current = responder;
-    while (current) {
-        if ([current isKindOfClass:[UIInputViewController class]]) {
-            return (UIInputViewController *)current;
+- (void)handleTouchBegan:(NSSet *)touches withEvent:(UIEvent *)event {
+    if (!WTGetConfiguration().enabled) return;
+
+    UITouch *touch = [touches anyObject];
+    self.startPoint = [touch locationInView:self.hostView];
+    self.startTime = [NSDate timeIntervalSinceReferenceDate];
+    self.isTracking = YES;
+    self.directionLocked = NO;
+    self.verticalSwipeDetected = NO;
+
+    WTSLog(@"开始跟踪触摸: (%.1f, %.1f)", self.startPoint.x, self.startPoint.y);
+}
+
+- (void)handleTouchMoved:(NSSet *)touches withEvent:(UIEvent *)event {
+    if (!self.isTracking) return;
+
+    UITouch *touch = [touches anyObject];
+    CGPoint currentPoint = [touch locationInView:self.hostView];
+    CGFloat deltaX = currentPoint.x - self.startPoint.x;
+    CGFloat deltaY = currentPoint.y - self.startPoint.y;
+
+    CGFloat absDeltaX = fabs(deltaX);
+    CGFloat absDeltaY = fabs(deltaY);
+
+    // 方向锁定
+    if (!self.directionLocked && (absDeltaX > 10 || absDeltaY > 10)) {
+        if (absDeltaY > absDeltaX * 1.5) {
+            self.directionLocked = YES;
+        } else {
+            self.isTracking = NO;
+            return;
         }
-        current = current.nextResponder;
     }
+
+    // 检测垂直滑动
+    if (self.directionLocked && !self.verticalSwipeDetected && absDeltaY >= WTGetConfiguration().minSwipeDistance) {
+        self.verticalSwipeDetected = YES;
+
+        // 防抖处理
+        NSTimeInterval currentTime = [NSDate timeIntervalSinceReferenceDate];
+        if (currentTime - lastSwipeTime < kWTDebounceInterval) {
+            WTSLog(@"滑动频率太快，忽略");
+            return;
+        }
+
+        lastSwipeTime = currentTime;
+
+        if (deltaY < 0) {
+            // 向上滑动
+            [self handleUpSwipe];
+        } else {
+            // 向下滑动
+            [self handleDownSwipe];
+        }
+
+        if (WTGetConfiguration().suppressKeyTapOnSwipe) {
+            // 取消触摸事件的进一步处理
+            self.isTracking = NO;
+        }
+    }
+}
+
+- (void)handleTouchEnded:(NSSet *)touches withEvent:(UIEvent *)event {
+    self.isTracking = NO;
+    self.directionLocked = NO;
+    self.verticalSwipeDetected = NO;
+}
+
+- (void)handleUpSwipe {
+    WTSLogInfo(@"👆 检测到向上滑动 - 切换输入模式");
+    [self switchInputMode:-1];
+}
+
+- (void)handleDownSwipe {
+    WTSLogInfo(@"👇 检测到向下滑动 - 切换输入模式");
+    [self switchInputMode:1];
+}
+
+- (void)switchInputMode:(NSInteger)direction {
+    // 获取键盘输入控制器
+    UIInputViewController *inputController = [self findInputViewController];
+    if (!inputController) {
+        WTSLog(@"没找到输入控制器");
+        return;
+    }
+
+    // 尝试多种方式切换输入模式
+    [self switchModeInController:inputController direction:direction];
+}
+
+- (UIInputViewController *)findInputViewController {
+    UIResponder *responder = self.hostView;
+    while (responder) {
+        if ([responder isKindOfClass:[UIInputViewController class]]) {
+            return (UIInputViewController *)responder;
+        }
+        responder = responder.nextResponder;
+    }
+
+    // 备用方法：通过键盘查找
+    if ([self.hostView respondsToSelector:@selector(inputViewController)]) {
+        return [self.hostView performSelector:@selector(inputViewController)];
+    }
+
     return nil;
 }
 
-+ (NSArray *)getWeTypeInputModes:(UIInputViewController *)controller {
-    if (!controller) {
-        return nil;
+- (void)switchModeInController:(UIInputViewController *)controller direction:(NSInteger)direction {
+    // 方法1：使用标准API
+    @try {
+        NSArray *inputModes = [controller inputModes];
+        if (inputModes.count > 1) {
+            [self switchUsingStandardAPI:controller direction:direction];
+            return;
+        }
+    } @catch (NSException *exception) {
+        WTSLog(@"标准API切换失败: %@", exception.reason);
     }
-    
-    // Try to get WeType's mode manager first
-    Class weTypeControllerClass = NSClassFromString(@"WBInputViewController");
-    if (weTypeControllerClass && [controller isKindOfClass:weTypeControllerClass]) {
-        // Try to get the mode manager
-        SEL managerSel = NSSelectorFromString(@"inputModeManager");
-        if ([controller respondsToSelector:managerSel]) {
-            id manager = ((id (*)(id, SEL))objc_msgSend)(controller, managerSel);
-            if (manager) {
-                SEL modesSel = NSSelectorFromString(@"availableInputModes");
-                if ([manager respondsToSelector:modesSel]) {
-                    NSArray *modes = ((NSArray *(*)(id, SEL))objc_msgSend)(manager, modesSel);
-                    if (modes.count > 0) {
-                        WTSLog(@"Got %ld modes from WeType mode manager", (long)modes.count);
-                        return modes;
+
+    // 方法2：使用微信输入法特定API
+    [self switchUsingWeTypeAPI:controller direction:direction];
+}
+
+- (void)switchUsingStandardAPI:(UIInputViewController *)controller direction:(NSInteger)direction {
+    @try {
+        // 尝试获取当前输入模式
+        UITextInputMode *currentMode = controller.textInputMode;
+        if (!currentMode) {
+            WTSLog(@"无法获取当前输入模式");
+            return;
+        }
+
+        NSArray *inputModes = [controller inputModes];
+        NSUInteger currentIndex = [inputModes indexOfObject:currentMode];
+
+        if (currentIndex != NSNotFound) {
+            NSUInteger newIndex;
+            if (direction > 0) {
+                newIndex = (currentIndex + 1) % inputModes.count;
+            } else {
+                newIndex = (currentIndex == 0) ? inputModes.count - 1 : currentIndex - 1;
+            }
+
+            UITextInputMode *newMode = inputModes[newIndex];
+            if (newMode) {
+                [controller setInputMode:newMode];
+                WTSLogInfo(@"成功切换到输入模式: %@", newMode);
+                return;
+            }
+        }
+    } @catch (NSException *exception) {
+        WTSLog(@"标准切换失败: %@", exception.reason);
+    }
+
+    WTSLog(@"标准切换失败");
+}
+
+- (void)switchUsingWeTypeAPI:(UIInputViewController *)controller direction:(NSInteger)direction {
+    // 微信输入法特定切换逻辑
+    @try {
+        // 尝试调用微信输入法的私有方法
+        SEL switchSelector = NSSelectorFromString(@"switchToNextInputMode");
+        if ([controller respondsToSelector:switchSelector]) {
+            ((void (*)(id, SEL))objc_msgSend)(controller, switchSelector);
+            WTSLog(@"使用微信输入法API切换");
+            return;
+        }
+
+        // 尝试其他可能的方法
+        NSArray *selectors = @[
+            @"advanceToNextInputMode",
+            @"cycleInputModes",
+            @"switchInputMode:",
+            @"nextInputMode"
+        ];
+
+        for (NSString *selectorName in selectors) {
+            SEL sel = NSSelectorFromString(selectorName);
+            if ([controller respondsToSelector:sel]) {
+                @try {
+                    if ([selectorName containsString:@":"]) {
+                        ((void (*)(id, SEL, NSInteger))objc_msgSend)(controller, sel, direction);
+                    } else {
+                        ((void (*)(id, SEL))objc_msgSend)(controller, sel);
                     }
+                    WTSLog(@"成功调用方法: %@", selectorName);
+                    return;
+                } @catch (NSException *e) {
+                    continue;
                 }
             }
         }
-        
-        // Try direct mode access on controller
-        NSArray<NSString *> *modeSelectors = @[
-            @"availableInputModes",
-            @"inputModes",
-            @"supportedInputModes",
-            @"enabledInputModes"
-        ];
-        
-        for (NSString *selectorName in modeSelectors) {
-            SEL selector = NSSelectorFromString(selectorName);
-            if ([controller respondsToSelector:selector]) {
-                NSArray *modes = ((NSArray *(*)(id, SEL))objc_msgSend)(controller, selector);
-                if (modes.count > 0) {
-                    WTSLog(@"Got %ld modes from controller selector %@", (long)modes.count, selectorName);
-                    return modes;
-                }
-            }
-        }
+
+    } @catch (NSException *exception) {
+        WTSLog(@"微信输入法API切换失败: %@", exception.reason);
     }
-    
-    // Fallback to standard iOS input modes
-    if ([controller respondsToSelector:@selector(inputModes)]) {
-        NSArray *modes = [controller inputModes];
-        if (modes.count > 0) {
-            WTSLog(@"Got %ld modes from standard iOS inputModes", (long)modes.count);
-            return modes;
-        }
-    }
-    
-    return nil;
+
+    WTSLog(@"所有切换方法都失败了");
 }
-
-+ (id)getCurrentWeTypeInputMode:(UIInputViewController *)controller {
-    if (!controller) {
-        return nil;
-    }
-    
-    // Try WeType-specific current mode methods
-    Class weTypeControllerClass = NSClassFromString(@"WBInputViewController");
-    if (weTypeControllerClass && [controller isKindOfClass:weTypeControllerClass]) {
-        NSArray<NSString *> *currentModeSelectors = @[
-            @"currentInputMode",
-            @"activeInputMode",
-            @"selectedInputMode",
-            @"currentMode"
-        ];
-        
-        for (NSString *selectorName in currentModeSelectors) {
-            SEL selector = NSSelectorFromString(selectorName);
-            if ([controller respondsToSelector:selector]) {
-                id mode = ((id (*)(id, SEL))objc_msgSend)(controller, selector);
-                if (mode) {
-                    WTSLog(@"Got current mode from WeType selector %@", selectorName);
-                    return mode;
-                }
-            }
-        }
-    }
-    
-    // Fallback to standard iOS methods
-    return WTSCurrentInputMode(controller);
-}
-
-+ (BOOL)setWeTypeInputMode:(UIInputViewController *)controller mode:(id)mode {
-    if (!controller || !mode) {
-        return NO;
-    }
-    
-    // Try WeType-specific mode setting methods
-    Class weTypeControllerClass = NSClassFromString(@"WBInputViewController");
-    if (weTypeControllerClass && [controller isKindOfClass:weTypeControllerClass]) {
-        NSArray<NSString *> *setModeSelectors = @[
-            @"setInputMode:",
-            @"switchToInputMode:",
-            @"changeToInputMode:",
-            @"selectInputMode:",
-            @"activateInputMode:"
-        ];
-        
-        for (NSString *selectorName in setModeSelectors) {
-            SEL selector = NSSelectorFromString(selectorName);
-            if ([controller respondsToSelector:selector]) {
-                WTSLog(@"Setting mode using WeType selector %@", selectorName);
-                ((void (*)(id, SEL, id))objc_msgSend)(controller, selector, mode);
-                return YES;
-            }
-        }
-    }
-    
-    // Fallback to standard iOS method
-    SEL setInputModeSel = @selector(setInputMode:);
-    if ([controller respondsToSelector:setInputModeSel]) {
-        WTSLog(@"Setting mode using standard setInputMode:");
-        ((void (*)(id, SEL, id))objc_msgSend)(controller, setInputModeSel, mode);
-        return YES;
-    }
-    
-    return NO;
-}
-
-+ (NSString *)getModeDisplayName:(id)mode {
-    if (!mode) {
-        return @"<unknown>";
-    }
-    
-    // Try to get display name from mode object
-    SEL displayNameSel = NSSelectorFromString(@"displayName");
-    if ([mode respondsToSelector:displayNameSel]) {
-        NSString *displayName = ((NSString *(*)(id, SEL))objc_msgSend)(mode, displayNameSel);
-        if (displayName.length > 0) {
-            return displayName;
-        }
-    }
-    
-    SEL localizedNameSel = NSSelectorFromString(@"localizedName");
-    if ([mode respondsToSelector:localizedNameSel]) {
-        NSString *localizedName = ((NSString *(*)(id, SEL))objc_msgSend)(mode, localizedNameSel);
-        if (localizedName.length > 0) {
-            return localizedName;
-        }
-    }
-    
-    // Fallback to primary language
-    NSString *language = WTSPrimaryLanguageFromMode(mode);
-    if (language.length > 0) {
-        return language;
-    }
-    
-    // Final fallback to description
-    return [mode description];
-}
-
-+ (BOOL)isChineseMode:(id)mode {
-    if (!mode) {
-        return NO;
-    }
-    
-    NSString *displayName = [self getModeDisplayName:mode];
-    NSString *lowerName = [displayName lowercaseString];
-    
-    // Check if mode is Chinese by various indicators
-    return [lowerName containsString:@"chinese"] || 
-           [lowerName containsString:@"zh"] || 
-           [lowerName containsString:@"中文"] ||
-           [lowerName containsString:@"简体"] ||
-           [lowerName containsString:@"繁体"] ||
-           [lowerName containsString:@"拼音"] ||
-           [lowerName containsString:@"pinyin"];
-}
-
-+ (BOOL)isEnglishMode:(id)mode {
-    if (!mode) {
-        return NO;
-    }
-    
-    NSString *displayName = [self getModeDisplayName:mode];
-    NSString *lowerName = [displayName lowercaseString];
-    
-    // Check if mode is English by various indicators
-    return [lowerName containsString:@"english"] || 
-           [lowerName containsString:@"en"] || 
-           [lowerName containsString:@"英文"] ||
-           [lowerName containsString:@"英语"];
-}
-
-+ (id)findChineseMode:(NSArray *)modes {
-    for (id mode in modes) {
-        if ([self isChineseMode:mode]) {
-            return mode;
-        }
-    }
-    return nil;
-}
-
-+ (id)findEnglishMode:(NSArray *)modes {
-    for (id mode in modes) {
-        if ([self isEnglishMode:mode]) {
-            return mode;
-        }
-    }
-    return nil;
-}
-
-+ (void)switchToPreviousModeForHostView:(UIView *)hostView {
-    UIInputViewController *controller = [self inputControllerForResponder:hostView];
-    if (!controller) {
-        controller = [self inputControllerForResponder:hostView.nextResponder];
-    }
-    if (!controller) {
-        WTSLog(@"No input controller found for previous mode switch");
-        return;
-    }
-    
-    NSArray *modes = [self getWeTypeInputModes:controller];
-    if (!modes || modes.count < 2) {
-        WTSLog(@"Insufficient modes for switching (%ld available)", (long)(modes ? modes.count : 0));
-        return;
-    }
-    
-    // Log all available modes for debugging
-    NSMutableArray *modeNames = [NSMutableArray array];
-    for (id mode in modes) {
-        [modeNames addObject:[self getModeDisplayName:mode]];
-    }
-    WTSLog(@"Available modes: %@", [modeNames componentsJoinedByString:@", "]);
-    
-    id currentMode = [self getCurrentWeTypeInputMode:controller];
-    NSString *currentModeName = [self getModeDisplayName:currentMode];
-    BOOL isCurrentChinese = [self isChineseMode:currentMode];
-    BOOL isCurrentEnglish = [self isEnglishMode:currentMode];
-    
-    WTSLog(@"Up swipe: Current mode=%@ (isChinese=%@ isEnglish=%@)", 
-           currentModeName, isCurrentChinese ? @"YES" : @"NO", isCurrentEnglish ? @"YES" : @"NO");
-    
-    // Find Chinese and English modes
-    id chineseMode = [self findChineseMode:modes];
-    id englishMode = [self findEnglishMode:modes];
-    
-    if (!chineseMode || !englishMode) {
-        WTSLog(@"Could not find both Chinese and English modes (chinese=%@ english=%@)", 
-               chineseMode ? @"found" : @"not found", englishMode ? @"found" : @"not found");
-        // Fallback to circular switching if we can't identify Chinese/English modes
-        NSInteger currentIndex = [modes indexOfObject:currentMode];
-        if (currentIndex == NSNotFound) {
-            currentIndex = 0;
-        }
-        NSInteger previousIndex = currentIndex > 0 ? currentIndex - 1 : modes.count - 1;
-        id previousMode = modes[previousIndex];
-        NSString *previousModeName = [self getModeDisplayName:previousMode];
-        
-        if ([self setWeTypeInputMode:controller mode:previousMode]) {
-            WTSLog(@"Fallback: Switched to previous mode: %@ (from %@)", previousModeName, currentModeName);
-        } else {
-            WTSLog(@"Fallback: Failed to switch to previous mode: %@", previousModeName);
-        }
-        return;
-    }
-    
-    // Toggle between Chinese and English only
-    id targetMode = nil;
-    if (isCurrentChinese) {
-        targetMode = englishMode;
-        WTSLog(@"Up swipe: Switching from Chinese to English");
-    } else {
-        targetMode = chineseMode;
-        WTSLog(@"Up swipe: Switching to Chinese (current is not Chinese)");
-    }
-    
-    NSString *targetModeName = [self getModeDisplayName:targetMode];
-    if ([self setWeTypeInputMode:controller mode:targetMode]) {
-        WTSLog(@"Successfully switched to %@ (from %@)", targetModeName, currentModeName);
-    } else {
-        WTSLog(@"Failed to switch to %@", targetModeName);
-    }
-}
-
-+ (void)switchToNextModeForHostView:(UIView *)hostView {
-    UIInputViewController *controller = [self inputControllerForResponder:hostView];
-    if (!controller) {
-        controller = [self inputControllerForResponder:hostView.nextResponder];
-    }
-    if (!controller) {
-        WTSLog(@"No input controller found for next mode switch");
-        return;
-    }
-    
-    NSArray *modes = [self getWeTypeInputModes:controller];
-    if (!modes || modes.count < 2) {
-        WTSLog(@"Insufficient modes for switching (%ld available)", (long)(modes ? modes.count : 0));
-        return;
-    }
-    
-    // Log all available modes for debugging
-    NSMutableArray *modeNames = [NSMutableArray array];
-    for (id mode in modes) {
-        [modeNames addObject:[self getModeDisplayName:mode]];
-    }
-    WTSLog(@"Available modes: %@", [modeNames componentsJoinedByString:@", "]);
-    
-    id currentMode = [self getCurrentWeTypeInputMode:controller];
-    NSString *currentModeName = [self getModeDisplayName:currentMode];
-    BOOL isCurrentChinese = [self isChineseMode:currentMode];
-    BOOL isCurrentEnglish = [self isEnglishMode:currentMode];
-    
-    WTSLog(@"Down swipe: Current mode=%@ (isChinese=%@ isEnglish=%@)", 
-           currentModeName, isCurrentChinese ? @"YES" : @"NO", isCurrentEnglish ? @"YES" : @"NO");
-    
-    // Find Chinese and English modes
-    id chineseMode = [self findChineseMode:modes];
-    id englishMode = [self findEnglishMode:modes];
-    
-    if (!chineseMode || !englishMode) {
-        WTSLog(@"Could not find both Chinese and English modes (chinese=%@ english=%@)", 
-               chineseMode ? @"found" : @"not found", englishMode ? @"found" : @"not found");
-        // Fallback to circular switching if we can't identify Chinese/English modes
-        NSInteger currentIndex = [modes indexOfObject:currentMode];
-        if (currentIndex == NSNotFound) {
-            currentIndex = 0;
-        }
-        NSInteger nextIndex = (currentIndex + 1) % modes.count;
-        id nextMode = modes[nextIndex];
-        NSString *nextModeName = [self getModeDisplayName:nextMode];
-        
-        if ([self setWeTypeInputMode:controller mode:nextMode]) {
-            WTSLog(@"Fallback: Switched to next mode: %@ (from %@)", nextModeName, currentModeName);
-        } else {
-            WTSLog(@"Fallback: Failed to switch to next mode: %@", nextModeName);
-        }
-        return;
-    }
-    
-    // Toggle between Chinese and English only
-    id targetMode = nil;
-    if (isCurrentEnglish) {
-        targetMode = chineseMode;
-        WTSLog(@"Down swipe: Switching from English to Chinese");
-    } else {
-        targetMode = englishMode;
-        WTSLog(@"Down swipe: Switching to English (current is not English)");
-    }
-    
-    NSString *targetModeName = [self getModeDisplayName:targetMode];
-    if ([self setWeTypeInputMode:controller mode:targetMode]) {
-        WTSLog(@"Successfully switched to %@ (from %@)", targetModeName, currentModeName);
-    } else {
-        WTSLog(@"Failed to switch to %@", targetModeName);
-    }
-}
-
-// Legacy method removed - replaced by new WeType-specific mode switching
-
-// Legacy methods removed - replaced by new WeType-specific mode switching with proper previous/next logic
 
 @end
 
-static const void *kWTTouchTrackerKey = &kWTTouchTrackerKey;
+// ===== 智能视图匹配系统 =====
 
-static BOOL WTSShouldInstallOnView(UIView *view) {
-    if (!view) {
+static BOOL WTShouldInstallOnView(UIView *view) {
+    if (!view || view.hidden || view.alpha < 0.1) {
         return NO;
     }
-    
-    // Skip if already installed
-    if (objc_getAssociatedObject(view, kWTTouchTrackerKey) != nil) {
-        return NO;
+
+    CGSize bounds = view.bounds.size;
+    if (bounds.width < 50 || bounds.height < 30) {
+        return NO; // 太小的视图不需要
     }
-    
-    // Check if view is large enough to be worth installing on
-    CGSize boundsSize = view.bounds.size;
-    if (boundsSize.width < 20.0 || boundsSize.height < 20.0) {
-        return NO;
-    }
-    
-    // Check if view is visible
-    if (view.hidden || view.alpha < 0.1) {
-        return NO;
-    }
-    
+
     NSString *className = NSStringFromClass(view.class);
-    
-    // Skip individual key views - they're too small for swipe detection
-    // and hooking them breaks gesture recognition
-    if ([className containsString:@"KeyView"] || 
-        [className hasSuffix:@"Key"] ||
-        [className isEqualToString:@"WBKeyView"] ||
-        [className isEqualToString:@"WXKBKeyView"]) {
+
+    // 排除按键视图
+    if ([className containsString:@"Key"] || [className containsString:@"Button"]) {
         return NO;
     }
-    
-    // Prioritize larger views and keyboard container views
-    BOOL isKeyboardContainer = [className containsString:@"Keyboard"] || 
-                               [className containsString:@"Input"] ||
-                               [className containsString:@"MainInputView"] ||
-                               [className containsString:@"WB"] ||
-                               [className containsString:@"WXKB"];
-    
-    // Install on keyboard container views or larger views
-    BOOL isLargeEnough = boundsSize.width > 100.0 && boundsSize.height > 50.0;
-    
-    return (isKeyboardContainer && isLargeEnough) || (boundsSize.width > 200.0 && boundsSize.height > 100.0);
+
+    // 优先hook大的容器视图
+    if (bounds.width > 200 && bounds.height > 100) {
+        return YES;
+    }
+
+    // 微信键盘相关视图
+    if ([className containsString:@"WB"] ||
+        [className containsString:@"WXKB"] ||
+        [className containsString:@"Keyboard"] ||
+        [className containsString:@"Input"]) {
+        return YES;
+    }
+
+    return NO;
 }
 
-static void WTSInstallTouchTrackerIfNeeded(UIView *view) {
-    if (!WTSShouldInstallOnView(view)) {
+// ===== Hook安装器 =====
+
+static void WTInstallSwipeManager(UIView *view) {
+    if (!WTShouldInstallOnView(view)) {
         return;
     }
-    
+
+    // 检查是否已经安装
+    if (objc_getAssociatedObject(view, "WTVerticalSwipeManager")) {
+        return;
+    }
+
     WTVerticalSwipeManager *manager = [[WTVerticalSwipeManager alloc] initWithHostView:view];
-    objc_setAssociatedObject(view, kWTTouchTrackerKey, manager, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    
-    WTSLog(@"Installed touch tracker on view: %@ (%.1fx%.1f)", 
-           NSStringFromClass(view.class), view.bounds.size.width, view.bounds.size.height);
+    objc_setAssociatedObject(view, "WTVerticalSwipeManager", manager, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 保存到全局字典
+    if (!activeSwipeManagers) {
+        activeSwipeManagers = [NSMutableDictionary dictionary];
+    }
+    activeSwipeManagers[NSValue valueWithPointer:(__bridge const void *)view] = manager;
+
+    WTSLogInfo(@"✅ 在视图 %@ (%.0fx%.0f) 上安装了滑动手势",
+               NSStringFromClass(view.class), bounds.width, bounds.height);
 }
 
-// WeType keyboard view classes to hook for comprehensive gesture coverage
-// Only container views are hooked - individual key views are excluded to allow
-// proper swipe detection (container views capture full gesture) while preserving
-// long-press functionality on individual keys
+// ===== 确认存在的类（通过二进制文件验证） =====
+
 @interface WBMainInputView : UIView @end
 @interface WBKeyboardView : UIView @end
 @interface WBInputViewController : UIInputViewController @end
-@interface WXKBKeyboardView : UIView @end  // Additional WeType keyboard view
-@interface WXKBMainKeyboardView : UIView @end  // Main keyboard container
-@interface WXKBKeyContainerView : UIView @end  // Key container view
+@interface WBPanelLayout : UIView @end
 
-static void WTSProcessTouchMovedForView(UIView *view, NSSet<UITouch *> *touches) {
-    if (!view || touches.count == 0) {
-        return;
-    }
-    
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(view, kWTTouchTrackerKey);
-    if (!tracker) {
-        return;
-    }
-    
-    const WTConfiguration *config = WTCurrentConfiguration();
-    UITouch *touch = touches.anyObject;
-    CGPoint currentPoint = [touch locationInView:view];
-    NSTimeInterval currentTime = [[NSDate date] timeIntervalSince1970];
-    
-    CGFloat dy = currentPoint.y - tracker.touchState.startPoint.y;
-    CGFloat dx = currentPoint.x - tracker.touchState.startPoint.x;
-    
-    WTTouchState state = tracker.touchState;
-    
-    if (!state.directionLocked) {
-        CGFloat absDx = fabs(dx);
-        CGFloat absDy = fabs(dy);
-        
-        WTSLog(@"[%@] Touch moved: dx=%.1f, dy=%.1f (not locked yet)", 
-               NSStringFromClass(view.class), dx, dy);
-        
-        if (absDy > absDx * 1.5 && absDy > 10.0) {
-            state.directionLocked = YES;
-            tracker.touchState = state;
-            WTSLog(@"[%@] Direction locked to vertical (dx=%.1f, dy=%.1f, absDy=%.1f > absDx=%.1f * 1.5)", 
-                   NSStringFromClass(view.class), dx, dy, absDy, absDx);
-        } else if (absDx > absDy * 2.0 && absDx > 15.0) {
-            WTSLog(@"[%@] Horizontal movement detected, releasing tracker (dx=%.1f, dy=%.1f)", 
-                   NSStringFromClass(view.class), dx, dy);
-            state.directionLocked = NO;
-            tracker.touchState = state;
-            return;
-        }
-    }
-    
-    // Re-read the state after potential update to ensure we have the latest directionLocked value
-    state = tracker.touchState;
-    
-    if (state.directionLocked && !state.verticalSwipeDetected) {
-        CGFloat absDy = fabs(dy);
-        WTSLog(@"[%@] Vertical swipe in progress: dy=%.1f, absDy=%.1f, threshold=%.1f, detected=%d", 
-               NSStringFromClass(view.class), dy, absDy, config->minTranslationY, 
-               absDy >= config->minTranslationY);
-        
-        if (absDy >= config->minTranslationY) {
-            state.verticalSwipeDetected = YES;
-            
-            if (currentTime - state.lastTriggerTime < 0.25) {
-                WTSLog(@"[%@] Swipe detected but too soon since last trigger (%.3fs), ignoring", 
-                       NSStringFromClass(view.class), currentTime - state.lastTriggerTime);
-                tracker.touchState = state;
-                return;
-            }
-            
-            if (dy < 0) {
-                WTSLogInfo(@"[%@] ✓ Up swipe detected: dy=%.1f, distance=%.1f", 
-                          NSStringFromClass(view.class), dy, absDy);
-                [[WTVerticalSwipeManager class] switchToPreviousModeForHostView:view];
-            } else {
-                WTSLogInfo(@"[%@] ✓ Down swipe detected: dy=%.1f, distance=%.1f", 
-                          NSStringFromClass(view.class), dy, absDy);
-                [[WTVerticalSwipeManager class] switchToNextModeForHostView:view];
-            }
-            
-            state.lastTriggerTime = currentTime;
-            tracker.touchState = state;
-        }
-    }
-}
-
-%group WTSWeTypeHooks
+// ===== 主要Hook实现 =====
 
 %hook WBMainInputView
-- (void)didMoveToWindow {
-    %orig;
-    WTSInstallTouchTrackerIfNeeded(self);
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = %orig;
+    if (self) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            WTInstallSwipeManager(self);
+            // 递归安装到子视图
+            [WTInstallToSubviews:self];
+        });
+    }
+    return self;
 }
 
-- (void)layoutSubviews {
-    %orig;
-    WTSInstallTouchTrackerIfNeeded(self);
-}
-
-- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker && touches.count > 0) {
-        UITouch *touch = touches.anyObject;
-        WTTouchState state = tracker.touchState;
-        state.startPoint = [touch locationInView:self];
-        state.startTime = [[NSDate date] timeIntervalSince1970];
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
-        WTSLog(@"[%@] Touch began at (%.1f, %.1f) - bounds: %.1fx%.1f", 
-               NSStringFromClass(self.class), state.startPoint.x, state.startPoint.y,
-               self.bounds.size.width, self.bounds.size.height);
+- (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *manager = objc_getAssociatedObject(self, "WTVerticalSwipeManager");
+    if (manager) {
+        [manager handleTouchBegan:touches withEvent:event];
     }
     %orig;
 }
 
-- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTSProcessTouchMovedForView(self, touches);
-    %orig;
-}
-
-- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker) {
-        WTSLog(@"[%@] Touch ended, resetting state", NSStringFromClass(self.class));
-        WTTouchState state = tracker.touchState;
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
+- (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *manager = objc_getAssociatedObject(self, "WTVerticalSwipeManager");
+    if (manager) {
+        [manager handleTouchMoved:touches withEvent:event];
+        if (manager.suppressKeyTapOnSwipe && manager.verticalSwipeDetected) {
+            return; // 阻止原始触摸事件
+        }
     }
     %orig;
 }
 
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker) {
-        WTSLog(@"[%@] Touch cancelled, resetting state", NSStringFromClass(self.class));
-        WTTouchState state = tracker.touchState;
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
+- (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
+    WTVerticalSwipeManager *manager = objc_getAssociatedObject(self, "WTVerticalSwipeManager");
+    if (manager) {
+        [manager handleTouchEnded:touches withEvent:event];
     }
     %orig;
 }
+
 %end
 
 %hook WBKeyboardView
-- (void)didMoveToWindow {
-    %orig;
-    WTSInstallTouchTrackerIfNeeded(self);
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = %orig;
+    if (self) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            WTInstallSwipeManager(self);
+            [WTInstallToSubviews:self];
+        });
+    }
+    return self;
 }
 
 - (void)layoutSubviews {
     %orig;
-    WTSInstallTouchTrackerIfNeeded(self);
+    // 布局变化时重新安装
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        WTInstallSwipeManager(self);
+        [WTInstallToSubviews:self];
+    });
 }
 
-- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker && touches.count > 0) {
-        UITouch *touch = touches.anyObject;
-        WTTouchState state = tracker.touchState;
-        state.startPoint = [touch locationInView:self];
-        state.startTime = [[NSDate date] timeIntervalSince1970];
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
-        WTSLog(@"[%@] Touch began at (%.1f, %.1f) - bounds: %.1fx%.1f", 
-               NSStringFromClass(self.class), state.startPoint.x, state.startPoint.y,
-               self.bounds.size.width, self.bounds.size.height);
+%end
+
+%hook WBPanelLayout
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = %orig;
+    if (self) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            WTInstallSwipeManager(self);
+            [WTInstallToSubviews:self];
+        });
     }
-    %orig;
+    return self;
 }
 
-- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTSProcessTouchMovedForView(self, touches);
-    %orig;
-}
-
-- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker) {
-        WTSLog(@"[%@] Touch ended, resetting state", NSStringFromClass(self.class));
-        WTTouchState state = tracker.touchState;
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
-    }
-    %orig;
-}
-
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker) {
-        WTSLog(@"[%@] Touch cancelled, resetting state", NSStringFromClass(self.class));
-        WTTouchState state = tracker.touchState;
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
-    }
-    %orig;
-}
 %end
 
 %hook WBInputViewController
-- (void)viewDidLoad {
+
+- (void)viewDidAppear:(BOOL)animated {
     %orig;
-    WTSInstallTouchTrackerIfNeeded(self.view);
+
+    // 控制器出现时安装到主视图
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.view) {
+            WTInstallSwipeManager(self.view);
+            [WTInstallToSubviews:self.view];
+        }
+    });
 }
 
-- (void)viewDidLayoutSubviews {
-    %orig;
-    WTSInstallTouchTrackerIfNeeded(self.view);
-}
 %end
 
-%hook WXKBKeyboardView
-- (void)didMoveToWindow {
+// ===== 通用Hook - 捕获可能遗漏的视图 =====
+
+%hook UIView
+
+- (void)didAddSubview:(UIView *)subview {
     %orig;
-    WTSInstallTouchTrackerIfNeeded(self);
+
+    if (WTShouldInstallOnView(subview)) {
+        WTInstallSwipeManager(subview);
+    }
 }
 
 - (void)layoutSubviews {
     %orig;
-    WTSInstallTouchTrackerIfNeeded(self);
-}
 
-- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker && touches.count > 0) {
-        UITouch *touch = touches.anyObject;
-        WTTouchState state = tracker.touchState;
-        state.startPoint = [touch locationInView:self];
-        state.startTime = [[NSDate date] timeIntervalSince1970];
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
-        WTSLog(@"[%@] Touch began at (%.1f, %.1f) - bounds: %.1fx%.1f", 
-               NSStringFromClass(self.class), state.startPoint.x, state.startPoint.y,
-               self.bounds.size.width, self.bounds.size.height);
+    // 只对可能是键盘的视图进行递归安装
+    NSString *className = NSStringFromClass(self.class);
+    if ([className containsString:@"WB"] ||
+        [className containsString:@"WXKB"] ||
+        [className containsString:@"Keyboard"] ||
+        [className containsString:@"Input"]) {
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [WTInstallToSubviews:self];
+        });
     }
-    %orig;
 }
 
-- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTSProcessTouchMovedForView(self, touches);
-    %orig;
-}
-
-- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker) {
-        WTSLog(@"[%@] Touch ended, resetting state", NSStringFromClass(self.class));
-        WTTouchState state = tracker.touchState;
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
-    }
-    %orig;
-}
-
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker) {
-        WTSLog(@"[%@] Touch cancelled, resetting state", NSStringFromClass(self.class));
-        WTTouchState state = tracker.touchState;
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
-    }
-    %orig;
-}
 %end
 
-%hook WXKBMainKeyboardView
-- (void)didMoveToWindow {
-    %orig;
-    WTSInstallTouchTrackerIfNeeded(self);
-}
+// ===== 辅助函数 =====
 
-- (void)layoutSubviews {
-    %orig;
-    WTSInstallTouchTrackerIfNeeded(self);
-}
+static void WTInstallToSubviews(UIView *view) {
+    for (UIView *subview in view.subviews) {
+        if (WTShouldInstallOnView(subview)) {
+            WTInstallSwipeManager(subview);
+        }
 
-- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker && touches.count > 0) {
-        UITouch *touch = touches.anyObject;
-        WTTouchState state = tracker.touchState;
-        state.startPoint = [touch locationInView:self];
-        state.startTime = [[NSDate date] timeIntervalSince1970];
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
-        WTSLog(@"[%@] Touch began at (%.1f, %.1f) - bounds: %.1fx%.1f", 
-               NSStringFromClass(self.class), state.startPoint.x, state.startPoint.y,
-               self.bounds.size.width, self.bounds.size.height);
+        // 递归（有深度限制）
+        if (subview.subviews.count < 20) {
+            WTInstallToSubviews(subview);
+        }
     }
-    %orig;
 }
 
-- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTSProcessTouchMovedForView(self, touches);
-    %orig;
-}
-
-- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker) {
-        WTSLog(@"[%@] Touch ended, resetting state", NSStringFromClass(self.class));
-        WTTouchState state = tracker.touchState;
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
-    }
-    %orig;
-}
-
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker) {
-        WTSLog(@"[%@] Touch cancelled, resetting state", NSStringFromClass(self.class));
-        WTTouchState state = tracker.touchState;
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
-    }
-    %orig;
-}
-%end
-
-%hook WXKBKeyContainerView
-- (void)didMoveToWindow {
-    %orig;
-    WTSInstallTouchTrackerIfNeeded(self);
-}
-
-- (void)layoutSubviews {
-    %orig;
-    WTSInstallTouchTrackerIfNeeded(self);
-}
-
-- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker && touches.count > 0) {
-        UITouch *touch = touches.anyObject;
-        WTTouchState state = tracker.touchState;
-        state.startPoint = [touch locationInView:self];
-        state.startTime = [[NSDate date] timeIntervalSince1970];
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
-        WTSLog(@"[%@] Touch began at (%.1f, %.1f) - bounds: %.1fx%.1f", 
-               NSStringFromClass(self.class), state.startPoint.x, state.startPoint.y,
-               self.bounds.size.width, self.bounds.size.height);
-    }
-    %orig;
-}
-
-- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTSProcessTouchMovedForView(self, touches);
-    %orig;
-}
-
-- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker) {
-        WTSLog(@"[%@] Touch ended, resetting state", NSStringFromClass(self.class));
-        WTTouchState state = tracker.touchState;
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
-    }
-    %orig;
-}
-
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    WTVerticalSwipeManager *tracker = objc_getAssociatedObject(self, kWTTouchTrackerKey);
-    if (tracker) {
-        WTSLog(@"[%@] Touch cancelled, resetting state", NSStringFromClass(self.class));
-        WTTouchState state = tracker.touchState;
-        state.directionLocked = NO;
-        state.verticalSwipeDetected = NO;
-        tracker.touchState = state;
-    }
-    %orig;
-}
-%end
-
-// Individual key view hooks removed - touch handling only on container views
-// This ensures swipe detection works properly (container views capture full gesture)
-// while preserving long-press functionality on individual keys
-
-%hook UIKeyboardImpl
-- (void)activate {
-    %orig;
-    WTMaybeEmitKeyboardImplDiagnostics(self, NSStringFromSelector(_cmd), nil);
-}
-
-- (void)setInputMode:(id)mode {
-    %orig(mode);
-    WTMaybeEmitKeyboardImplDiagnostics(self, NSStringFromSelector(_cmd), mode);
-}
-%end
-
-%end
+// ===== 初始化 =====
 
 %ctor {
     @autoreleasepool {
-        WTLogLaunchDiagnostics();
-        if (!WTFeatureEnabled()) {
-            WTSLog(@"wxkeyboard tweak disabled via preferences; skipping initialization.");
+        if (!WTIsWeTypeKeyboardProcess()) {
+            NSLog(@"[WxKeyboard] 非微信输入法进程，跳过初始化");
             return;
         }
-        if (WTSProcessIsWeTypeKeyboard()) {
-            WTSLog(@"Initializing WeType hook group.");
-            %init(WTSWeTypeHooks);
-        } else {
-            WTSLog(@"Process not matched for WeType hooks; initialization skipped.");
+
+        if (!WTGetConfiguration().enabled) {
+            NSLog(@"[WxKeyboard] 插件已禁用");
+            return;
         }
+
+        WTSLogInfo(@"🚀 老王终极修复版微信键盘插件启动！");
+        WTSLogInfo(@"Bundle: %@", [[NSBundle mainBundle] bundleIdentifier]);
+        WTSLogInfo(@"可执行文件: [[[NSBundle mainBundle] executablePath]]);
+
+        // 初始化Hook组
+        %init;
+
+        WTSLogInfo(@"✅ 所有Hook已激活，插件运行中...");
     }
+}
+
+// ===== 卸载清理 =====
+
+__attribute__((destructor))
+static void WTDeinitialize(void) {
+    if (activeSwipeManagers) {
+        [activeSwipeManagers removeAllObjects];
+        activeSwipeManagers = nil;
+    }
+    WTSLog(@"老王的微信键盘插件已卸载");
 }
