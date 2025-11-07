@@ -367,6 +367,9 @@ static BOOL WTShouldInstallOnView(UIView *view) {
 
 // ===== Hook安装器 =====
 
+// Forward declaration
+static void WTInstallToSubviews(UIView *view);
+
 static void WTInstallSwipeManager(UIView *view) {
     if (!WTShouldInstallOnView(view)) {
         return;
