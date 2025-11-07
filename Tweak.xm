@@ -4,6 +4,11 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
+@interface UIInputViewController (WeTypeExtensions)
+- (NSArray *)inputModes;
+- (void)setInputMode:(UITextInputMode *)mode;
+@end
+
 // ===== 老王的终极修复版微信键盘插件 =====
 // 这个版本专门解决插件失效问题，采用更智能的Hook策略
 
@@ -379,7 +384,8 @@ static void WTInstallSwipeManager(UIView *view) {
     if (!activeSwipeManagers) {
         activeSwipeManagers = [NSMutableDictionary dictionary];
     }
-    activeSwipeManagers[NSValue valueWithPointer:(__bridge const void *)view] = manager;
+    [activeSwipeManagers setObject:manager forKey:[NSValue valueWithPointer:(__bridge const void *)view]];
+    CGSize bounds = view.bounds.size;
 
     WTSLogInfo(@"✅ 在视图 %@ (%.0fx%.0f) 上安装了滑动手势",
                NSStringFromClass(view.class), bounds.width, bounds.height);
@@ -402,7 +408,7 @@ static void WTInstallSwipeManager(UIView *view) {
         dispatch_async(dispatch_get_main_queue(), ^{
             WTInstallSwipeManager(self);
             // 递归安装到子视图
-            [WTInstallToSubviews:self];
+            WTInstallToSubviews(self);
         });
     }
     return self;
@@ -420,7 +426,7 @@ static void WTInstallSwipeManager(UIView *view) {
     WTVerticalSwipeManager *manager = objc_getAssociatedObject(self, "WTVerticalSwipeManager");
     if (manager) {
         [manager handleTouchMoved:touches withEvent:event];
-        if (manager.suppressKeyTapOnSwipe && manager.verticalSwipeDetected) {
+        if (WTGetConfiguration().suppressKeyTapOnSwipe && manager.verticalSwipeDetected) {
             return; // 阻止原始触摸事件
         }
     }
@@ -444,7 +450,7 @@ static void WTInstallSwipeManager(UIView *view) {
     if (self) {
         dispatch_async(dispatch_get_main_queue(), ^{
             WTInstallSwipeManager(self);
-            [WTInstallToSubviews:self];
+            WTInstallToSubviews(self);
         });
     }
     return self;
@@ -455,7 +461,7 @@ static void WTInstallSwipeManager(UIView *view) {
     // 布局变化时重新安装
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         WTInstallSwipeManager(self);
-        [WTInstallToSubviews:self];
+        WTInstallToSubviews(self);
     });
 }
 
@@ -468,7 +474,7 @@ static void WTInstallSwipeManager(UIView *view) {
     if (self) {
         dispatch_async(dispatch_get_main_queue(), ^{
             WTInstallSwipeManager(self);
-            [WTInstallToSubviews:self];
+            WTInstallToSubviews(self);
         });
     }
     return self;
@@ -485,7 +491,7 @@ static void WTInstallSwipeManager(UIView *view) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self.view) {
             WTInstallSwipeManager(self.view);
-            [WTInstallToSubviews:self.view];
+            WTInstallToSubviews(self.view);
         }
     });
 }
@@ -515,7 +521,7 @@ static void WTInstallSwipeManager(UIView *view) {
         [className containsString:@"Input"]) {
 
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [WTInstallToSubviews:self];
+            WTInstallToSubviews(self);
         });
     }
 }
@@ -553,7 +559,7 @@ static void WTInstallToSubviews(UIView *view) {
 
         WTSLogInfo(@"🚀 老王终极修复版微信键盘插件启动！");
         WTSLogInfo(@"Bundle: %@", [[NSBundle mainBundle] bundleIdentifier]);
-        WTSLogInfo(@"可执行文件: [[[NSBundle mainBundle] executablePath]]);
+        WTSLogInfo(@"可执行文件: %@", [[NSBundle mainBundle] executablePath]);
 
         // 初始化Hook组
         %init;
